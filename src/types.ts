@@ -8,7 +8,31 @@ export type DayResult = {
   draws: Draw[];
 };
 
-export type TabMode = "dia" | "geral" | "palpites";
+export type TabMode = "dia" | "geral" | "palpites" | "game";
+
+export type GameUser = {
+  password: string;
+  name: string;
+  points: number;
+};
+
+export type GameBet = {
+  id: string;
+  userPassword: string;
+  betType: "grupo" | "dezena" | "centena" | "milhar";
+  betValue: string;
+  amount: number;
+  date: string;
+  drawLabel: string;
+  settled: boolean;
+  won: boolean | null;
+};
+
+export type GameData = {
+  users: GameUser[];
+  bets: GameBet[];
+  nextBetId: number;
+};
 
 export type ParsedTextResult = {
   date: string | null;

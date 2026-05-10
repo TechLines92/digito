@@ -3,6 +3,8 @@ import Tesseract from "tesseract.js";
 import { ANIMAIS, HOURS_ORDER, THEME_COLORS } from "./constants";
 import { AnimalGroupsGrid } from "./components/AnimalGroupsGrid";
 import { FreqBars } from "./components/FreqBars";
+import { Game } from "./components/Game";
+import { Podium } from "./components/Podium";
 import {
   computeGrupoCounts,
   countDigits,
@@ -1298,12 +1300,32 @@ export default function App() {
             transform: translateY(-6px);
             background: #ffdd00;
           }
-          75% { 
-            transform: translateY(-3px);
-            background: #ffcc00;
-          }
-        }
-      `}</style>
+           75% { 
+             transform: translateY(-3px);
+             background: #ffcc00;
+           }
+         }
+         @keyframes outline-pulse {
+           0%, 100% { 
+             box-shadow: 0 0 8px ${yellow}88, 0 0 16px ${yellow}44;
+             border-color: ${yellow};
+           }
+           50% { 
+             box-shadow: 0 0 16px ${yellow}, 0 0 32px ${yellow}88;
+             border-color: #ffcc00;
+           }
+         }
+         @keyframes outline-pulse-green {
+           0%, 100% { 
+             box-shadow: 0 0 8px ${green}88, 0 0 16px ${green}44;
+             border-color: ${green};
+           }
+           50% { 
+             box-shadow: 0 0 16px ${green}, 0 0 32px ${green}88;
+             border-color: #00ff44;
+           }
+         }
+       `}</style>
 
       <div style={{ textAlign: "center", marginBottom: "12px" }}>
         <img
@@ -1318,6 +1340,7 @@ export default function App() {
           }}
         />
       </div>
+      {tab !== "game" && (<>
       <div
         style={{
           fontFamily: bebas,
@@ -2167,9 +2190,11 @@ export default function App() {
              >
                ADICIONAR/ATUALIZAR RESULTADO
              </button>
-          </form>
-        </div>
-      )}
+           </form>
+         </div>
+       )}
+      </>)}
+      <Podium />
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
@@ -2177,10 +2202,11 @@ export default function App() {
           ["dia", "RANKING DO DIA"],
           ["geral", "RANKING GERAL"],
           ["palpites", "PALPITES"],
+          ["game", "JOGO"],
         ].map(([key, label]) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            onClick={() => setTab(key as TabMode)}
             style={{
               flex: 1,
               padding: "10px",
@@ -2193,6 +2219,8 @@ export default function App() {
                     ? yellow
                     : key === "palpites"
                     ? orange
+                    : key === "game"
+                    ? "#a855f7"
                     : green
                   : panel,
               color: tab === key ? "#000" : dim,
@@ -2202,6 +2230,8 @@ export default function App() {
                     ? yellow
                     : key === "palpites"
                     ? orange
+                    : key === "game"
+                    ? "#a855f7"
                     : green
                   : bdr
               }`,
@@ -3385,8 +3415,6 @@ export default function App() {
             PALPITES - REPETIÇÃO SEQUENCIAL
           </h2>
           {(() => {
-            const palpiteMap = new Map<string, { dezena: string; horario: string; datas: string[]; count: number }[]>();
-
             // Ordenar dias cronologicamente
             const sortedDays = [...days].sort((a, b) => {
               const [da, ma, ya] = a.date.split("/").map(Number);
@@ -3394,59 +3422,95 @@ export default function App() {
               return new Date(ya, ma - 1, da).getTime() - new Date(yb, mb - 1, db).getTime();
             });
 
-            // Agrupar dezenas por horário e data
-            const key = (horario: string, dezena: string) => `${horario}_${dezena}`;
-            const occur: Record<string, string[]> = {};
+            const toDate = (s: string) => {
+              const [d, m, y] = s.split("/").map(Number);
+              return new Date(y, m - 1, d);
+            };
+            const fmtDate = (dt: Date) =>
+              `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
+            const diffDays = (a: string, b: string) =>
+              (toDate(b).getTime() - toDate(a).getTime()) / (1000 * 60 * 60 * 24);
+
+            // Agrupar dezenas por dia (qualquer horário)
+            const dezenaPorDia: Record<string, Record<string, string[]>> = {};
 
             for (const day of sortedDays) {
               for (const draw of day.draws) {
                 for (const milhar of draw.milhares) {
                   const dezena = milhar.slice(-2);
-                  const k = key(draw.label, dezena);
-                  if (!occur[k]) occur[k] = [];
-                  if (!occur[k].includes(day.date)) occur[k].push(day.date);
+                  if (!dezenaPorDia[dezena]) dezenaPorDia[dezena] = {};
+                  if (!dezenaPorDia[dezena][day.date]) dezenaPorDia[dezena][day.date] = [];
+                  if (!dezenaPorDia[dezena][day.date].includes(draw.label)) {
+                    dezenaPorDia[dezena][day.date].push(draw.label);
+                  }
                 }
               }
             }
 
-            // Detectar repetições em dias consecutivos
+            // Última data inserida no sistema
+            const ultimoDia = sortedDays.length > 0 ? sortedDays[sortedDays.length - 1].date : "";
+
+            // Gerar lista dos últimos 4 dias
+            const ultimos4Dias: string[] = [];
+            if (ultimoDia) {
+              const ref = toDate(ultimoDia);
+              for (let j = 3; j >= 0; j--) {
+                const d = new Date(ref);
+                d.setDate(d.getDate() - j);
+                ultimos4Dias.push(fmtDate(d));
+              }
+            }
+
+            // Dezenas que apareceram em TODOS os 4 dias
+            const firmesGreen = ultimoDia
+              ? Object.entries(dezenaPorDia)
+                  .filter(([_, dias]) => ultimos4Dias.every(d => dias[d]))
+                  .map(([dezena, dias]) => ({
+                    dezena,
+                    datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] })),
+                  }))
+              : [];
+
+            // Dezenas que apareceram em 3 dos 4 dias (falhou 1)
+            const firmesOrange = ultimoDia
+              ? Object.entries(dezenaPorDia)
+                  .filter(([_, dias]) => {
+                    const presentes = ultimos4Dias.filter(d => dias[d]).length;
+                    return presentes === 3;
+                  })
+                  .map(([dezena, dias]) => ({
+                    dezena,
+                    datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] || [] })),
+                  }))
+              : [];
+
+            // Detectar repetições em 2 dias consecutivos (previsão)
             const palpiteList: { dezena: string; horario: string; datas: string[]; nextDate: string }[] = [];
 
             for (const day of sortedDays) {
               for (const draw of day.draws) {
                 for (const milhar of draw.milhares) {
                   const dezena = milhar.slice(-2);
-                  const k = key(draw.label, dezena);
-                  const datas = occur[k];
+                  const dias = dezenaPorDia[dezena];
+                  if (!dias) continue;
+                  const datas = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? -1 : 1);
                   if (datas.length < 2) continue;
 
-                  // Verificar se há 2 aparições consecutivas terminando neste dia
                   const idx = datas.indexOf(day.date);
                   if (idx < 1) continue;
 
                   const d1 = datas[idx - 1];
                   const d2 = datas[idx];
 
-                  const [dd1, mm1, yy1] = d1.split("/").map(Number);
-                  const [dd2, mm2, yy2] = d2.split("/").map(Number);
-                  const date1 = new Date(yy1, mm1 - 1, dd1);
-                  const date2 = new Date(yy2, mm2 - 1, dd2);
-                  const diffDays = (date2.getTime() - date1.getTime()) / (1000 * 60 * 60 * 24);
-
-                  if (diffDays === 1) {
-                    // Calcular próxima data prevista
-                    const next = new Date(date2);
+                  if (diffDays(d1, d2) === 1) {
+                    const next = new Date(toDate(d2));
                     next.setDate(next.getDate() + 1);
-                    const nd = `${String(next.getDate()).padStart(2, "0")}/${String(next.getMonth() + 1).padStart(2, "0")}/${next.getFullYear()}`;
+                    const nd = fmtDate(next);
 
-                    // Verificar se já não saiu na data prevista
                     if (!datas.includes(nd)) {
-                      // Só mostrar se a data prevista é hoje ou futura
-                      const [dn, mn, yn] = nd.split("/").map(Number);
-                      const nextDateObj = new Date(yn, mn - 1, dn);
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
-                      if (nextDateObj >= today) {
+                      if (next >= today) {
                         palpiteList.push({ dezena, horario: draw.label, datas: [d1, d2], nextDate: nd });
                       }
                     }
@@ -3454,6 +3518,57 @@ export default function App() {
                 }
               }
             }
+
+            // ── Score de Confiança ──
+            const allM = sortedDays.flatMap(d => d.draws.flatMap(dr => dr.milhares));
+            const gCounts = Array(25).fill(0);
+            allM.forEach(m => { const g = parseInt(m.slice(-2), 10) === 0 ? 25 : Math.ceil(parseInt(m.slice(-2), 10) / 4); gCounts[g - 1]++; });
+            const sortedGC = [...gCounts].sort((a, b) => b - a);
+            const top3Val = sortedGC[2] || 0;
+            const top5Val = sortedGC[4] || 0;
+
+            const calcScore = (dzn: string) => {
+              const dias = dezenaPorDia[dzn];
+              if (!dias) return { score: 0, color: red, pct: 0 };
+              const dates = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? 1 : -1);
+              if (dates.length === 0) return { score: 0, color: red, pct: 0 };
+
+              let streak = 1, maxStreak = 1;
+              for (let i = 1; i < dates.length; i++) {
+                if (diffDays(dates[i-1], dates[i]) === 1) { streak++; maxStreak = Math.max(maxStreak, streak); }
+                else streak = 1;
+              }
+              const streakPct = maxStreak >= 4 ? 95 : maxStreak === 3 ? 85 : maxStreak === 2 ? 70 : 0;
+              const s1 = (streakPct / 100) * 35;
+
+              const refD = toDate(ultimoDia);
+              let recent = 0;
+              for (let i = 0; i < 7; i++) { const d = new Date(refD); d.setDate(d.getDate() - i); if (dias[fmtDate(d)]) recent++; }
+              const s2 = (recent / 7) * 20;
+
+              const lastDate = dates[dates.length - 1];
+              const daysSince = diffDays(lastDate, ultimoDia);
+              const atrasoPct = daysSince <= 1 ? 30 : daysSince === 2 ? 80 : daysSince === 3 ? 100 : daysSince === 4 ? 90 : daysSince <= 7 ? 60 : 20;
+              const s3 = (atrasoPct / 100) * 15;
+
+              const allH = Object.values(dias).flat();
+              const uniqueH = new Set(allH).size;
+              const hPct = uniqueH === 1 ? 100 : uniqueH === 2 ? 60 : 20;
+              const s4 = (hPct / 100) * 15;
+
+              const gGreen = firmesGreen.some(f => f.dezena === dzn);
+              const gOrange = firmesOrange.some(f => f.dezena === dzn);
+              const s5 = gGreen ? 10 : gOrange ? 5 : 0;
+
+              const dzNum = parseInt(dzn, 10);
+              const gId = dzNum === 0 ? 25 : Math.ceil(dzNum / 4);
+              const gc = gCounts[gId - 1];
+              const gPct = gc >= top3Val ? 100 : gc >= top5Val ? 60 : 20;
+              const s6 = (gPct / 100) * 5;
+
+              const total = Math.round(s1 + s2 + s3 + s4 + s5 + s6);
+              return { score: total, color: total >= 70 ? green : total >= 40 ? orange : red, pct: total };
+            };
 
             // Agrupar por horário
             const grouped: Record<string, typeof palpiteList> = {};
@@ -3466,44 +3581,161 @@ export default function App() {
 
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-                {horarios.map((h) => {
-                  const items = grouped[h] || [];
-                  return (
-                    <div key={h} style={{ background: panel, border: `1px solid ${bdr}`, borderRadius: "10px", padding: "16px" }}>
-                      <div style={{ fontFamily: bebas, fontSize: "1.1rem", letterSpacing: "2px", color: orange, marginBottom: "10px" }}>
-                        {h} ({items.length} palpites)
-                      </div>
-                      {items.length === 0 ? (
-                        <div style={{ color: dim, fontSize: "0.85rem" }}>Nenhuma repetição detectada</div>
-                      ) : (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-                           {items.map((p, i) => {
-                             const dezenaNum = parseInt(p.dezena, 10);
-                             const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
-                             const animal = ANIMAIS[grupoId - 1];
-                             return (
-                             <div key={i} style={{ background: "#1a1a2e", border: `1px solid ${orange}`, borderRadius: "8px", padding: "10px 14px", textAlign: "center" }}>
-                               <div style={{ fontFamily: bebas, fontSize: "1.4rem", color: "#fff", letterSpacing: "2px" }}>
-                                 {animal?.emoji} {p.dezena}
-                               </div>
-                               <div style={{ fontSize: "0.7rem", color: "#fff", marginTop: "4px" }}>
-                                 {p.datas.join(" → ")}
-                               </div>
-                               <div style={{ fontSize: "0.75rem", color: orange, marginTop: "4px" }}>
-                                 Próximo: {p.nextDate}
-                               </div>
-                             </div>
-                           )})}
-                        </div>
-                      )}
+                {/* ── DEZENAS FIRMES 4/4 ── */}
+                {firmesGreen.length > 0 && (
+                  <div style={{ background: panel, border: `1px solid ${green}`, borderRadius: "10px", padding: "16px" }}>
+                    <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: green, marginBottom: "14px", textAlign: "center" }}>
+                      🔥 DEZENAS FIRMES (4/4)
                     </div>
-                  );
-                })}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", justifyContent: "center" }}>
+                      {firmesGreen.map((s, i) => {
+                        const sc = calcScore(s.dezena);
+                        const dezenaNum = parseInt(s.dezena, 10);
+                        const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
+                        const animal = ANIMAIS[grupoId - 1];
+                        return (
+                          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+                            <div style={{
+                              width: "68px",
+                              height: "68px",
+                              borderRadius: "50%",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              background: "transparent",
+                              border: `2px solid ${green}`,
+                            }}>
+                              <span style={{ fontSize: "1.3rem", lineHeight: 1 }}>{animal?.emoji}</span>
+                              <span style={{ fontFamily: bebas, fontSize: "1rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{s.dezena}</span>
+                            </div>
+                            <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
+                              {s.datas.map(d => d.date.split("/")[0]).join(" ")}
+                            </div>
+                            <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
+                              {s.datas.map(d => d.horarios.join(" ")).join(" ")}
+                            </div>
+                            <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
+                              <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
+                            </div>
+                            <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>
+                              {sc.score}%
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── DEZENAS FIRMES 3/4 ── */}
+                {firmesOrange.length > 0 && (
+                  <div style={{ background: panel, border: `1px solid ${orange}`, borderRadius: "10px", padding: "16px" }}>
+                    <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: orange, marginBottom: "14px", textAlign: "center" }}>
+                      🔥 DEZENAS FIRMES (3/4)
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", justifyContent: "center" }}>
+                      {firmesOrange.map((s, i) => {
+                        const sc = calcScore(s.dezena);
+                        const dezenaNum = parseInt(s.dezena, 10);
+                        const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
+                        const animal = ANIMAIS[grupoId - 1];
+                        const diaFaltou = s.datas.find(d => d.horarios.length === 0);
+                        return (
+                          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+                            <div style={{
+                              width: "68px",
+                              height: "68px",
+                              borderRadius: "50%",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              background: "transparent",
+                              border: `2px solid ${orange}`,
+                            }}>
+                              <span style={{ fontSize: "1.3rem", lineHeight: 1 }}>{animal?.emoji}</span>
+                              <span style={{ fontFamily: bebas, fontSize: "1rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{s.dezena}</span>
+                            </div>
+                            <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
+                              {s.datas.map(d => d.date.split("/")[0]).join(" ")}
+                            </div>
+                            <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
+                              {s.datas.map(d => d.horarios.join(" ")).join(" ")}
+                            </div>
+                            {diaFaltou && (
+                              <div style={{ fontSize: "0.6rem", color: orange, textAlign: "center" }}>
+                                Faltou: {diaFaltou.date}
+                              </div>
+                            )}
+                            <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
+                              <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
+                            </div>
+                            <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>
+                              {sc.score}%
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── PREVISÕES (2 DIAS) ── */}
+                <div style={{ background: panel, border: `1px solid ${bdr}`, borderRadius: "10px", padding: "16px" }}>
+                  <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: orange, marginBottom: "14px", textAlign: "center" }}>
+                    📊 PREVISÕES (REPETIÇÃO EM 2 DIAS)
+                  </div>
+                  {horarios.map((h) => {
+                    const items = grouped[h] || [];
+                    return (
+                      <div key={h} style={{ marginBottom: "12px" }}>
+                        <div style={{ fontFamily: bebas, fontSize: "1rem", letterSpacing: "2px", color: yellow, marginBottom: "8px" }}>
+                          {h} ({items.length})
+                        </div>
+                        {items.length === 0 ? (
+                          <div style={{ color: dim, fontSize: "0.8rem", marginBottom: "10px" }}>Nenhuma repetição detectada</div>
+                        ) : (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+                            {[...items].sort((a, b) => calcScore(b.dezena).score - calcScore(a.dezena).score).map((p, i) => {
+                              const sc = calcScore(p.dezena);
+                              const dezenaNum = parseInt(p.dezena, 10);
+                              const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
+                              const animal = ANIMAIS[grupoId - 1];
+                              return (
+                                <div key={i} style={{ background: "#1a1a2e", border: `1px solid ${sc.color}`, borderRadius: "8px", padding: "10px 14px", textAlign: "center" }}>
+                                  <div style={{ fontFamily: bebas, fontSize: "1.4rem", color: "#fff", letterSpacing: "2px" }}>
+                                    {animal?.emoji} {p.dezena}
+                                  </div>
+                                  <div style={{ width: "100%", height: "5px", background: "#2a2a3e", borderRadius: "3px", marginTop: "6px", overflow: "hidden" }}>
+                                    <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "3px" }} />
+                                  </div>
+                                  <div style={{ fontSize: "0.65rem", color: sc.color, marginTop: "2px", fontFamily: bebas, letterSpacing: "1px" }}>
+                                    {sc.score}% Confiança
+                                  </div>
+                                  <div style={{ fontSize: "0.7rem", color: "#fff", marginTop: "4px" }}>
+                                    {p.datas.join(" → ")}
+                                  </div>
+                                  <div style={{ fontSize: "0.75rem", color: orange, marginTop: "4px" }}>
+                                    Próximo: {p.nextDate}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             );
           })()}
         </>
       )}
+
+      {/* ── GAME VIEW ── */}
+      {tab === "game" && <Game days={days} />}
     </div>
   );
 }

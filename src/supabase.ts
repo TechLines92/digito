@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import type { DayResult } from "./types";
+import type { DayResult, GameData } from "./types";
 
 const supabaseUrl =
   import.meta.env.VITE_SUPABASE_URL || "https://vjmknwxcqnatqnboqkus.supabase.co";
@@ -34,6 +34,32 @@ export async function saveDaysToCloud(days: DayResult[]) {
     {
       id: STATE_ROW_ID,
       days,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" }
+  );
+
+  if (error) throw error;
+}
+
+const GAME_ROW_ID = "game_data";
+
+export async function loadGameData() {
+  const { data, error } = await supabase
+    .from(TABLE_NAME)
+    .select("days")
+    .eq("id", GAME_ROW_ID)
+    .maybeSingle<{ days: GameData }>();
+
+  if (error) throw error;
+  return data?.days ?? null;
+}
+
+export async function saveGameData(gameData: GameData) {
+  const { error } = await supabase.from(TABLE_NAME).upsert(
+    {
+      id: GAME_ROW_ID,
+      days: gameData,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "id" }

@@ -3589,10 +3589,7 @@ export default function App() {
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", justifyContent: "center" }}>
                       {firmesGreen.map((s, i) => {
-<<<<<<< HEAD
                         const sc = calcScore(s.dezena);
-=======
->>>>>>> 4e7a098dccc52278cbfe311ed3511fe64945829e
                         const dezenaNum = parseInt(s.dezena, 10);
                         const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
                         const animal = ANIMAIS[grupoId - 1];
@@ -3618,15 +3615,12 @@ export default function App() {
                             <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
                               {s.datas.map(d => d.horarios.join(" ")).join(" ")}
                             </div>
-<<<<<<< HEAD
                             <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
                               <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
                             </div>
                             <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>
                               {sc.score}%
                             </div>
-=======
->>>>>>> 4e7a098dccc52278cbfe311ed3511fe64945829e
                           </div>
                         );
                       })}
@@ -3642,10 +3636,7 @@ export default function App() {
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", justifyContent: "center" }}>
                       {firmesOrange.map((s, i) => {
-<<<<<<< HEAD
                         const sc = calcScore(s.dezena);
-=======
->>>>>>> 4e7a098dccc52278cbfe311ed3511fe64945829e
                         const dezenaNum = parseInt(s.dezena, 10);
                         const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
                         const animal = ANIMAIS[grupoId - 1];
@@ -3677,15 +3668,12 @@ export default function App() {
                                 Faltou: {diaFaltou.date}
                               </div>
                             )}
-<<<<<<< HEAD
                             <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
                               <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
                             </div>
                             <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>
                               {sc.score}%
                             </div>
-=======
->>>>>>> 4e7a098dccc52278cbfe311ed3511fe64945829e
                           </div>
                         );
                       })}
@@ -3709,17 +3697,12 @@ export default function App() {
                           <div style={{ color: dim, fontSize: "0.8rem", marginBottom: "10px" }}>Nenhuma repetição detectada</div>
                         ) : (
                           <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-<<<<<<< HEAD
                             {[...items].sort((a, b) => calcScore(b.dezena).score - calcScore(a.dezena).score).map((p, i) => {
                               const sc = calcScore(p.dezena);
-=======
-                            {items.map((p, i) => {
->>>>>>> 4e7a098dccc52278cbfe311ed3511fe64945829e
                               const dezenaNum = parseInt(p.dezena, 10);
                               const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
                               const animal = ANIMAIS[grupoId - 1];
                               return (
-<<<<<<< HEAD
                                 <div key={i} style={{ background: "#1a1a2e", border: `1px solid ${sc.color}`, borderRadius: "8px", padding: "10px 14px", textAlign: "center" }}>
                                   <div style={{ fontFamily: bebas, fontSize: "1.4rem", color: "#fff", letterSpacing: "2px" }}>
                                     {animal?.emoji} {p.dezena}
@@ -3730,12 +3713,6 @@ export default function App() {
                                   <div style={{ fontSize: "0.65rem", color: sc.color, marginTop: "2px", fontFamily: bebas, letterSpacing: "1px" }}>
                                     {sc.score}% Confiança
                                   </div>
-=======
-                                <div key={i} style={{ background: "#1a1a2e", border: `1px solid ${orange}`, borderRadius: "8px", padding: "10px 14px", textAlign: "center" }}>
-                                  <div style={{ fontFamily: bebas, fontSize: "1.4rem", color: "#fff", letterSpacing: "2px" }}>
-                                    {animal?.emoji} {p.dezena}
-                                  </div>
->>>>>>> 4e7a098dccc52278cbfe311ed3511fe64945829e
                                   <div style={{ fontSize: "0.7rem", color: "#fff", marginTop: "4px" }}>
                                     {p.datas.join(" → ")}
                                   </div>

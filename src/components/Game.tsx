@@ -11,20 +11,54 @@ const bebas = "'Bebas Neue', sans-serif";
 const mono = "'Share Tech Mono', monospace";
 
 const MULTIPLIERS: Record<string, number> = {
-  grupo: 23,
-  dezena: 97,
-  centena: 970,
-  milhar: 9700,
+  grupo: 25,
+  dezena: 100,
+  centena: 1000,
+  milhar: 10000,
 };
+
+function calcPrize(amount: number, betType: string, scope: string, position: number): number {
+  const base = MULTIPLIERS[betType];
+  if (scope === "cabeca") return position === 0 ? amount * base : 0;
+  if (scope === "1-5") return position < 5 ? Math.floor(amount * base / 5) : 0;
+  return Math.floor(amount * base / 10);
+}
+
+function scopeMultiplier(scope: string): string {
+  if (scope === "cabeca") return "";
+  return ` (÷${scope === "1-5" ? "5" : "10"})`;
+}
+
+function getBetPrize(bet: GameBet, days: DayResult[]): number {
+  const dayResult = days.find((d) => d.date === bet.date);
+  if (!dayResult) return 0;
+  const draw = dayResult.draws.find((d) => d.label === bet.drawLabel);
+  if (!draw) return 0;
+  for (let i = 0; i < draw.milhares.length; i++) {
+    const milhar = draw.milhares[i];
+    let match = false;
+    if (bet.betType === "milhar" && milhar === bet.betValue) match = true;
+    else if (bet.betType === "centena" && milhar.slice(-3) === bet.betValue) match = true;
+    else if (bet.betType === "dezena" && milhar.slice(-2) === bet.betValue) match = true;
+    else if (bet.betType === "grupo") {
+      const gid = getGrupoIdFromMilhar(milhar);
+      if (gid === parseInt(bet.betValue, 10)) match = true;
+    }
+    if (match) return calcPrize(bet.amount, bet.betType, bet.scope, i);
+  }
+  return 0;
+}
 
 const PASSWORD_MAP: Record<string, string> = {
   "2504": "Milena",
   "1004": "Luan",
+  "admin": "Banca",
 };
 
 const DEFAULT_USERS: GameUser[] = [
   { password: "2504", name: "Milena", points: 1000 },
   { password: "1004", name: "Luan", points: 1000 },
+  { password: "admin", name: "Banca", points: 0 },
 ];
 
 const DEFAULT_GAME_DATA: GameData = {
@@ -40,22 +74,35 @@ function formatDate(d: Date): string {
   return `${dd}/${mm}/${yyyy}`;
 }
 
-function getNextDraw(days: DayResult[]): string | null {
-  const now = new Date();
-  const today = formatDate(now);
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+function getNextDraw(days: DayResult[]): string {
+  const allWithResults: { date: string; label: string }[] = [];
 
-  const todayResult = days.find((d) => d.date === today);
-  const existingLabels = todayResult ? todayResult.draws.map((d) => d.label) : [];
-
-  for (const label of HOURS_ORDER) {
-    const hour = parseInt(label, 10);
-    const drawMinutes = hour * 60;
-    if (drawMinutes > currentMinutes && !existingLabels.includes(label)) {
-      return label;
+  for (const day of days) {
+    for (const draw of day.draws) {
+      if (draw.milhares.length > 0) {
+        allWithResults.push({ date: day.date, label: draw.label });
+      }
     }
   }
-  return null;
+
+  if (allWithResults.length === 0) {
+    return HOURS_ORDER[0];
+  }
+
+  allWithResults.sort((a, b) => {
+    const [aD, aM, aY] = a.date.split("/").map(Number);
+    const [bD, bM, bY] = b.date.split("/").map(Number);
+    const aDate = new Date(aY, aM - 1, aD).getTime();
+    const bDate = new Date(bY, bM - 1, bD).getTime();
+    if (aDate !== bDate) return bDate - aDate;
+    return HOURS_ORDER.indexOf(b.label) - HOURS_ORDER.indexOf(a.label);
+  });
+
+  const last = allWithResults[0];
+  const lastIdx = HOURS_ORDER.indexOf(last.label);
+  const nextIdx = (lastIdx + 1) % HOURS_ORDER.length;
+
+  return HOURS_ORDER[nextIdx];
 }
 
 function padValue(type: string, value: string): string {
@@ -158,7 +205,10 @@ function generatePdfReceipt(
       } else {
         desc = `${bet.betType.toUpperCase()} ${bet.betValue}`;
       }
-      const prize = bet.amount * MULTIPLIERS[bet.betType];
+      const scopeLabel = bet.scope === "cabeca" ? "CABEÇA" : bet.scope === "1-5" ? "1-5" : "1-10";
+      desc += ` [${scopeLabel}]`;
+      const scopeMult = bet.scope === "cabeca" ? MULTIPLIERS[bet.betType] : Math.floor(MULTIPLIERS[bet.betType] / (bet.scope === "1-5" ? 5 : 10));
+      const prizeDisp = bet.amount * scopeMult;
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
@@ -166,7 +216,7 @@ function generatePdfReceipt(
       y += 5;
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
-      doc.text(`${bet.amount} pts x${MULTIPLIERS[bet.betType]} = ${prize} pts`, pw / 2, y, { align: "center" });
+      doc.text(`${bet.amount} pts ×${scopeMult} = ${prizeDisp} pts`, pw / 2, y, { align: "center" });
       y += 8;
     }
 
@@ -210,6 +260,7 @@ export function Game({ days }: GameProps) {
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [betType, setBetType] = useState<"grupo" | "dezena" | "centena" | "milhar">("grupo");
+  const [scope, setScope] = useState<"cabeca" | "1-5" | "1-10">("cabeca");
   const [betValue, setBetValue] = useState("");
   const [selectedAnimals, setSelectedAnimals] = useState<number[]>([]);
   const [betAmount, setBetAmount] = useState("");
@@ -228,7 +279,13 @@ export function Game({ days }: GameProps) {
   useEffect(() => {
     (async () => {
       const existing = await loadGameData();
-      if (existing) setGameData(existing);
+      if (existing) {
+        if (!existing.users.find(u => u.password === "admin")) {
+          existing.users.push({ password: "admin", name: "Banca", points: 0 });
+          await saveGameData(existing);
+        }
+        setGameData(existing);
+      }
       loadedRef.current = true;
     })();
   }, []);
@@ -252,25 +309,19 @@ export function Game({ days }: GameProps) {
       if (!draw) return bet;
 
       let won = false;
-      for (const milhar of draw.milhares) {
-        if (bet.betType === "milhar" && milhar === bet.betValue) {
-          won = true;
-          break;
-        }
-        if (bet.betType === "centena" && milhar.slice(-3) === bet.betValue) {
-          won = true;
-          break;
-        }
-        if (bet.betType === "dezena" && milhar.slice(-2) === bet.betValue) {
-          won = true;
-          break;
-        }
-        if (bet.betType === "grupo") {
+      for (let i = 0; i < draw.milhares.length; i++) {
+        const milhar = draw.milhares[i];
+        let match = false;
+        if (bet.betType === "milhar" && milhar === bet.betValue) match = true;
+        else if (bet.betType === "centena" && milhar.slice(-3) === bet.betValue) match = true;
+        else if (bet.betType === "dezena" && milhar.slice(-2) === bet.betValue) match = true;
+        else if (bet.betType === "grupo") {
           const gid = getGrupoIdFromMilhar(milhar);
-          if (gid === parseInt(bet.betValue, 10)) {
-            won = true;
-            break;
-          }
+          if (gid === parseInt(bet.betValue, 10)) match = true;
+        }
+        if (match) {
+          const prize = calcPrize(bet.amount, bet.betType, bet.scope, i);
+          if (prize > 0) { won = true; break; }
         }
       }
 
@@ -280,15 +331,19 @@ export function Game({ days }: GameProps) {
 
     if (!changed) return;
 
+    let totalPrizePaid = 0;
     const newUsers = data.users.map((u) => {
       let pts = u.points;
       for (let i = 0; i < newBets.length; i++) {
         const b = newBets[i];
         const oldB = data.bets[i];
         if (b.settled && !oldB.settled && b.userPassword === u.password && b.won) {
-          pts += b.amount * MULTIPLIERS[b.betType];
+          const prize = getBetPrize(b, days);
+          pts += prize;
+          if (u.password !== "admin") totalPrizePaid += prize;
         }
       }
+      if (u.password === "admin") pts -= totalPrizePaid;
       return { ...u, points: pts };
     });
 
@@ -327,6 +382,86 @@ export function Game({ days }: GameProps) {
     setPasswordError("");
   }
 
+  function handleCheckResults() {
+    if (!gameData || !currentUser) return;
+    const today = formatDate(new Date());
+    let changed = false;
+    let wonCount = 0;
+    let totalPrize = 0;
+    let checkedCount = 0;
+
+    const newBets = gameData.bets.map((bet) => {
+      if (bet.settled) return bet;
+      if (bet.date !== today) return bet;
+      if (bet.userPassword !== currentUser.password) return bet;
+
+      const dayResult = days.find((d) => d.date === today);
+      if (!dayResult) return bet;
+
+      const draw = dayResult.draws.find((d) => d.label === bet.drawLabel);
+      if (!draw) return bet;
+
+      let won = false;
+      for (let i = 0; i < draw.milhares.length; i++) {
+        const milhar = draw.milhares[i];
+        let match = false;
+        if (bet.betType === "milhar" && milhar === bet.betValue) match = true;
+        else if (bet.betType === "centena" && milhar.slice(-3) === bet.betValue) match = true;
+        else if (bet.betType === "dezena" && milhar.slice(-2) === bet.betValue) match = true;
+        else if (bet.betType === "grupo") {
+          const gid = getGrupoIdFromMilhar(milhar);
+          if (gid === parseInt(bet.betValue, 10)) match = true;
+        }
+        if (match) {
+          const prize = calcPrize(bet.amount, bet.betType, bet.scope, i);
+          if (prize > 0) { won = true; break; }
+        }
+      }
+
+      changed = true;
+      checkedCount++;
+      if (won) wonCount++;
+      return { ...bet, settled: true, won };
+    });
+
+    if (!changed) {
+      setBetMessage("NENHUMA APOSTA PENDENTE PARA CONFERIR");
+      return;
+    }
+
+    const newUsers = gameData.users.map((u) => {
+      let pts = u.points;
+      for (let i = 0; i < newBets.length; i++) {
+        const b = newBets[i];
+        const oldB = gameData.bets[i];
+        if (b.settled && !oldB.settled && b.userPassword === u.password && b.won) {
+          const prize = getBetPrize(b, days);
+          pts += prize;
+          if (u.password === currentUser.password) {
+            totalPrize += prize;
+          }
+        }
+      }
+      if (u.password === "admin") pts -= totalPrize;
+      return { ...u, points: pts };
+    });
+
+    const updatedUser = newUsers.find((u) => u.password === currentUser.password);
+    if (updatedUser) {
+      setCurrentUser(updatedUser);
+    }
+
+    const newData: GameData = { ...gameData, users: newUsers, bets: newBets };
+    setGameData(newData);
+    saveGameData(newData);
+
+    if (wonCount > 0) {
+      setBetMessage(`VOCÊ GANHOU! ${wonCount} aposta(s) premiada(s) — Total: ${totalPrize} pts`);
+    } else {
+      setBetMessage(`CONFERIDO — ${checkedCount} aposta(s) — Nenhuma premiada`);
+    }
+  }
+
   function handlePlaceBet() {
     if (!gameData || !currentUser) return;
     const nextDraw = getNextDraw(days);
@@ -335,18 +470,6 @@ export function Game({ days }: GameProps) {
       return;
     }
     const today = formatDate(new Date());
-
-    const jaApostouTipo = gameData.bets.some(
-      b => b.userPassword === currentUser.password
-        && b.drawLabel === nextDraw
-        && b.date === today
-        && b.betType === betType
-        && !b.settled
-    );
-    if (jaApostouTipo) {
-      setBetMessage(`Você já apostou ${betType.toUpperCase()} no ${nextDraw}`);
-      return;
-    }
 
     if (betType === "grupo") {
       if (selectedAnimals.length === 0) {
@@ -388,37 +511,43 @@ export function Game({ days }: GameProps) {
     let nextId = gameData.nextBetId;
     const newBets: GameBet[] = [];
 
-    if (betType === "grupo") {
-      for (const animalId of selectedAnimals) {
+      if (betType === "grupo") {
+        for (const animalId of selectedAnimals) {
+          newBets.push({
+            id: String(nextId++),
+            userPassword: currentUser.password,
+            betType: "grupo",
+            betValue: String(animalId).padStart(2, "0"),
+            amount,
+            date: today,
+            drawLabel: nextDraw,
+            scope,
+            settled: false,
+            won: null,
+          });
+        }
+      } else {
+        const paddedValue = padValue(betType, betValue.replace(/\D/g, ""));
         newBets.push({
           id: String(nextId++),
           userPassword: currentUser.password,
-          betType: "grupo",
-          betValue: String(animalId).padStart(2, "0"),
+          betType,
+          betValue: paddedValue,
           amount,
           date: today,
           drawLabel: nextDraw,
+          scope,
           settled: false,
           won: null,
         });
       }
-    } else {
-      const paddedValue = padValue(betType, betValue.replace(/\D/g, ""));
-      newBets.push({
-        id: String(nextId++),
-        userPassword: currentUser.password,
-        betType,
-        betValue: paddedValue,
-        amount,
-        date: today,
-        drawLabel: nextDraw,
-        settled: false,
-        won: null,
-      });
-    }
 
     const newUsers = gameData.users.map((u) =>
-      u.password === currentUser.password ? { ...u, points: u.points - totalCost } : u
+      u.password === currentUser.password
+        ? { ...u, points: u.points - totalCost }
+        : u.password === "admin"
+        ? { ...u, points: u.points + totalCost }
+        : u
     );
     const newData: GameData = {
       ...gameData,
@@ -435,9 +564,10 @@ export function Game({ days }: GameProps) {
     setBetValue("");
     setSelectedAnimals([]);
     setBetAmount("");
+    const scopeLabel = scope === "cabeca" ? "CABEÇA" : scope === "1-5" ? "1-5" : "1-10";
     const label = betType === "grupo"
-      ? `${selectedAnimals.length} animais no ${nextDraw}`
-      : `Aposta registrada no ${nextDraw}!`;
+      ? `${selectedAnimals.length} animais no ${nextDraw} [${scopeLabel}]`
+      : `Aposta registrada! ${nextDraw} [${scopeLabel}]`;
     setBetMessage(label);
   }
 
@@ -483,7 +613,9 @@ export function Game({ days }: GameProps) {
       } else {
         desc = `${bet.betType.toUpperCase()} ${bet.betValue}`;
       }
-      lines.push(`${desc} - ${bet.amount} pts`);
+      const scopeLabel = bet.scope === "cabeca" ? "CABEÇA" : bet.scope === "1-5" ? "1-5" : "1-10";
+      const prize = calcPrize(bet.amount, bet.betType, bet.scope, 0);
+      lines.push(`${desc} [${scopeLabel}] - ${bet.amount} pts → ${prize} pts`);
     }
 
     const total = bets.reduce((s, b) => s + b.amount, 0);
@@ -542,9 +674,10 @@ export function Game({ days }: GameProps) {
             </div>
             <input
               type="text"
+              inputMode="numeric"
               value={passwordInput}
               onChange={(e) => {
-                setPasswordInput(e.target.value);
+                setPasswordInput(e.target.value.replace(/\D/g, ""));
                 setPasswordError("");
               }}
               onKeyDown={(e) => {
@@ -632,7 +765,7 @@ export function Game({ days }: GameProps) {
           marginBottom: "18px",
         }}
       >
-        {gameData.users.map((u) => (
+        {gameData.users.filter(u => u.password !== "admin").map((u) => (
           <div
             key={u.password}
             style={{
@@ -672,6 +805,7 @@ export function Game({ days }: GameProps) {
             key={t}
             onClick={() => {
               setBetType(t);
+              setScope("cabeca");
               setBetValue("");
               setSelectedAnimals([]);
               setBetMessage("");
@@ -691,6 +825,31 @@ export function Game({ days }: GameProps) {
             }}
           >
             {t === "grupo" ? "GRUPOS" : t === "dezena" ? "DEZENAS" : t === "centena" ? "CENTENAS" : "MILHARES"}
+          </button>
+        ))}
+      </div>
+
+      {}
+      <div style={{ display: "flex", gap: "6px", marginBottom: "16px" }}>
+        {(["cabeca", "1-5", "1-10"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setScope(s)}
+            style={{
+              flex: 1,
+              padding: "6px 4px",
+              fontFamily: bebas,
+              fontSize: "0.75rem",
+              letterSpacing: "1px",
+              background: scope === s ? "#a855f7" : panel,
+              color: scope === s ? "#fff" : dim,
+              border: `1px solid ${scope === s ? "#a855f7" : bdr}`,
+              borderRadius: "6px",
+              cursor: "pointer",
+              textTransform: "uppercase",
+            }}
+          >
+            {s === "cabeca" ? "CABEÇA" : s === "1-5" ? "1 AO 5" : "1 AO 10"}
           </button>
         ))}
       </div>
@@ -912,13 +1071,10 @@ export function Game({ days }: GameProps) {
         )}
 
         <div style={{ textAlign: "center", fontFamily: bebas, fontSize: "0.75rem", color: dim, marginTop: "8px" }}>
-          {betType === "milhar"
-            ? "Prêmio: ×9700"
-            : betType === "centena"
-            ? "Prêmio: ×970"
-            : betType === "dezena"
-            ? "Prêmio: ×97"
-            : "Prêmio: ×23"}
+          {betType === "grupo" && (scope === "cabeca" ? "Prêmio: ×25" : scope === "1-5" ? "Prêmio: ×5" : "Prêmio: ×2.5")}
+          {betType === "dezena" && (scope === "cabeca" ? "Prêmio: ×100" : scope === "1-5" ? "Prêmio: ×20" : "Prêmio: ×10")}
+          {betType === "centena" && (scope === "cabeca" ? "Prêmio: ×1000" : scope === "1-5" ? "Prêmio: ×200" : "Prêmio: ×100")}
+          {betType === "milhar" && (scope === "cabeca" ? "Prêmio: ×10000" : scope === "1-5" ? "Prêmio: ×2000" : "Prêmio: ×1000")}
         </div>
       </div>
 
@@ -1029,6 +1185,9 @@ export function Game({ days }: GameProps) {
                             return animal ? `${animal.emoji} ${animal.nome}` : `GRUPO ${bet.betValue}`;
                           })()
                         : `${bet.betType.toUpperCase()} ${bet.betValue}`}
+                      <span style={{ fontFamily: bebas, fontSize: "0.65rem", color: dim, marginLeft: "6px" }}>
+                        {bet.scope === "cabeca" ? "[CABEÇA]" : bet.scope === "1-5" ? "[1-5]" : "[1-10]"}
+                      </span>
                     </span>
                     <div style={{ textAlign: "right" }}>
                       <span style={{ fontFamily: mono, fontSize: "0.8rem", color: text }}>
@@ -1036,9 +1195,14 @@ export function Game({ days }: GameProps) {
                       </span>
                       <div style={{ fontFamily: bebas, fontSize: "0.7rem", letterSpacing: "1px" }}>
                         {!bet.settled ? (
-                          <span style={{ color: orange }}>⏳ Pendente</span>
+                          <span>
+                            <span style={{ color: orange }}>⏳ Pendente</span>
+                            <span style={{ color: green, fontSize: "0.65rem", marginLeft: "6px" }}>
+                              → {calcPrize(bet.amount, bet.betType, bet.scope, 0)} pts
+                            </span>
+                          </span>
                         ) : bet.won ? (
-                          <span style={{ color: green }}>✅ +{bet.amount * MULTIPLIERS[bet.betType]}</span>
+                          <span style={{ color: green }}>✅ +{getBetPrize(bet, days)}</span>
                         ) : (
                           <span style={{ color: red }}>❌ Perdeu</span>
                         )}
@@ -1071,6 +1235,22 @@ export function Game({ days }: GameProps) {
             SAIR
           </button>
           <button
+            onClick={handleCheckResults}
+            style={{
+              padding: "8px 24px",
+              fontFamily: bebas,
+              fontSize: "0.85rem",
+              letterSpacing: "2px",
+              background: "transparent",
+              color: yellow,
+              border: `1px solid ${yellow}`,
+              borderRadius: "6px",
+              cursor: "pointer",
+            }}
+          >
+            CONFERIR RESULTADO
+          </button>
+          <button
             onClick={() => {
               setResetStep("password");
               setResetPassword("");
@@ -1098,9 +1278,10 @@ export function Game({ days }: GameProps) {
             </span>
             <input
               type="text"
+              inputMode="numeric"
               value={resetPassword}
               onChange={(e) => {
-                setResetPassword(e.target.value);
+                setResetPassword(e.target.value.replace(/\D/g, ""));
                 setResetError("");
               }}
               onKeyDown={(e) => {

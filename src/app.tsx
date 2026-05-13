@@ -1442,9 +1442,10 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <input
                 type="text"
+                inputMode="numeric"
                 placeholder="Senha..."
                 value={passInput}
-                onChange={(e) => setPassInput(e.target.value)}
+                onChange={(e) => setPassInput(e.target.value.replace(/\D/g, ""))}
                 style={{
                   width: "70px",
                   background: "transparent",
@@ -1532,9 +1533,10 @@ export default function App() {
                 <div style={{ display: "flex", alignItems: "center" }}>
                   <input
                     type="text"
+                    inputMode="numeric"
                     placeholder="Senha"
                     value={removePassInput}
-                    onChange={(e) => setRemovePassInput(e.target.value)}
+                    onChange={(e) => setRemovePassInput(e.target.value.replace(/\D/g, ""))}
                     style={{
                       width: "50px",
                       background: "transparent",
@@ -1620,9 +1622,10 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
               <input
                 type="text"
+                inputMode="numeric"
                 placeholder="Senha..."
                 value={addPassInput}
-                onChange={(e) => setAddPassInput(e.target.value)}
+                onChange={(e) => setAddPassInput(e.target.value.replace(/\D/g, ""))}
                 style={{
                   width: "70px",
                   background: "transparent",
@@ -1988,10 +1991,11 @@ export default function App() {
                      >
                        SENHA PARA IMPORTAR:
                      </label>
-                    <input
-                      type="text"
-                      value={siteImportPass}
-                      onChange={(e) => setSiteImportPass(e.target.value)}
+                     <input
+                       type="text"
+                       inputMode="numeric"
+                       value={siteImportPass}
+                       onChange={(e) => setSiteImportPass(e.target.value.replace(/\D/g, ""))}
                       placeholder="Digite a senha..."
                       style={{
                         width: "100%",
@@ -2156,10 +2160,11 @@ export default function App() {
                >
                  SENHA PARA ADICIONAR:
                </label>
-              <input
-                type="text"
-                value={addPassInput}
-                onChange={(e) => setAddPassInput(e.target.value)}
+               <input
+                 type="text"
+                 inputMode="numeric"
+                 value={addPassInput}
+                 onChange={(e) => setAddPassInput(e.target.value.replace(/\D/g, ""))}
                 placeholder="Digite a senha..."
                 required
                 style={{

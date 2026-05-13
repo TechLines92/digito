@@ -24,6 +24,7 @@ export type GameBet = {
   amount: number;
   date: string;
   drawLabel: string;
+  scope: "cabeca" | "1-5" | "1-10";
   settled: boolean;
   won: boolean | null;
 };

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ANIMAIS, THEME_COLORS } from "../constants";
-import { loadGameData } from "../supabase";
+import { loadGameData, saveGameData } from "../supabase";
 import type { GameData, GameUser } from "../types";
 
 const { bg, panel, bdr, yellow, green, orange, dim, text } = THEME_COLORS;
@@ -8,10 +8,10 @@ const bebas = "'Bebas Neue', sans-serif";
 const mono = "'Share Tech Mono', monospace";
 
 const MULTIPLIERS: Record<string, number> = {
-  grupo: 23,
-  dezena: 97,
-  centena: 970,
-  milhar: 9700,
+  grupo: 25,
+  dezena: 100,
+  centena: 1000,
+  milhar: 10000,
 };
 
 function formatDate(d: Date): string {
@@ -42,7 +42,13 @@ export function Podium() {
     (async () => {
       try {
         const data = await loadGameData();
-        if (data) setGameData(data);
+        if (data) {
+          if (!data.users.find(u => u.password === "admin")) {
+            data.users.push({ password: "admin", name: "Banca", points: 0 });
+            await saveGameData(data);
+          }
+          setGameData(data);
+        }
       } catch {}
     })();
   }, []);

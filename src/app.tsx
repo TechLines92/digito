@@ -11,8 +11,376 @@ import {
   getGrupoIdFromMilhar,
   parseBancaUniao,
 } from "./utils";
-import { loadDaysFromCloud, saveDaysToCloud } from "./supabase";
-import type { DayResult, Draw, TabMode } from "./types";
+import { loadDaysFromCloud, saveDaysToCloud, loadPredictions, savePredictions } from "./supabase";
+import type { DayResult, Draw, TabMode, Prediction } from "./types";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUNÇÃO COMPUTAR PALPITES
+// ─────────────────────────────────────────────────────────────────────────────
+function computePredictionData(days: DayResult[]) {
+  const sortedDays = [...days].sort((a, b) => {
+    const [da, ma, ya] = a.date.split("/").map(Number);
+    const [db, mb, yb] = b.date.split("/").map(Number);
+    return new Date(ya, ma - 1, da).getTime() - new Date(yb, mb - 1, db).getTime();
+  });
+
+  const toDate = (s: string) => {
+    const [d, m, y] = s.split("/").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const fmtDate = (dt: Date) =>
+    `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
+  const diffDays = (a: string, b: string) =>
+    (toDate(b).getTime() - toDate(a).getTime()) / (1000 * 60 * 60 * 24);
+
+  const dezenaPorDia: Record<string, Record<string, string[]>> = {};
+  const centenaPorDia: Record<string, Record<string, string[]>> = {};
+  const grupoPorDia: Record<string, Record<string, string[]>> = {};
+  for (const day of sortedDays) {
+    for (const draw of day.draws) {
+      for (const milhar of draw.milhares) {
+        const dezena = milhar.slice(-2);
+        if (!dezenaPorDia[dezena]) dezenaPorDia[dezena] = {};
+        if (!dezenaPorDia[dezena][day.date]) dezenaPorDia[dezena][day.date] = [];
+        if (!dezenaPorDia[dezena][day.date].includes(draw.label)) {
+          dezenaPorDia[dezena][day.date].push(draw.label);
+        }
+
+        const centena = milhar.slice(1);
+        if (!centenaPorDia[centena]) centenaPorDia[centena] = {};
+        if (!centenaPorDia[centena][day.date]) centenaPorDia[centena][day.date] = [];
+        if (!centenaPorDia[centena][day.date].includes(draw.label)) {
+          centenaPorDia[centena][day.date].push(draw.label);
+        }
+
+        const grupo = String(getGrupoIdFromMilhar(milhar));
+        if (!grupoPorDia[grupo]) grupoPorDia[grupo] = {};
+        if (!grupoPorDia[grupo][day.date]) grupoPorDia[grupo][day.date] = [];
+        if (!grupoPorDia[grupo][day.date].includes(draw.label)) {
+          grupoPorDia[grupo][day.date].push(draw.label);
+        }
+      }
+    }
+  }
+
+  const ultimoDia = sortedDays.length > 0 ? sortedDays[sortedDays.length - 1].date : "";
+
+  const ultimos4Dias: string[] = [];
+  if (ultimoDia) {
+    const ref = toDate(ultimoDia);
+    for (let j = 3; j >= 0; j--) {
+      const d = new Date(ref);
+      d.setDate(d.getDate() - j);
+      ultimos4Dias.push(fmtDate(d));
+    }
+  }
+
+  const firmesGreen = ultimoDia
+    ? Object.entries(dezenaPorDia)
+        .filter(([_, dias]) => ultimos4Dias.every(d => dias[d]))
+        .map(([dezena, dias]) => ({
+          dezena,
+          datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] })),
+        }))
+    : [];
+
+  const firmesOrange = ultimoDia
+    ? Object.entries(dezenaPorDia)
+        .filter(([_, dias]) => {
+          const presentes = ultimos4Dias.filter(d => dias[d]).length;
+          return presentes === 3;
+        })
+        .map(([dezena, dias]) => ({
+          dezena,
+          datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] || [] })),
+        }))
+    : [];
+
+  const firmesGreenCentena = ultimoDia
+    ? Object.entries(centenaPorDia)
+        .filter(([_, dias]) => ultimos4Dias.every(d => dias[d]))
+        .map(([centena, dias]) => ({
+          centena,
+          datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] })),
+        }))
+    : [];
+
+  const firmesOrangeCentena = ultimoDia
+    ? Object.entries(centenaPorDia)
+        .filter(([_, dias]) => {
+          const presentes = ultimos4Dias.filter(d => dias[d]).length;
+          return presentes === 3;
+        })
+        .map(([centena, dias]) => ({
+          centena,
+          datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] || [] })),
+        }))
+    : [];
+
+  const firmesGreenGrupo = ultimoDia
+    ? Object.entries(grupoPorDia)
+        .filter(([_, dias]) => ultimos4Dias.every(d => dias[d]))
+        .map(([grupo, dias]) => ({
+          grupo,
+          datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] })),
+        }))
+    : [];
+
+  const firmesOrangeGrupo = ultimoDia
+    ? Object.entries(grupoPorDia)
+        .filter(([_, dias]) => {
+          const presentes = ultimos4Dias.filter(d => dias[d]).length;
+          return presentes === 3;
+        })
+        .map(([grupo, dias]) => ({
+          grupo,
+          datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] || [] })),
+        }))
+    : [];
+
+  const palpiteList: { dezena: string; horario: string; datas: string[]; nextDate: string }[] = [];
+  for (const day of sortedDays) {
+    for (const draw of day.draws) {
+      for (const milhar of draw.milhares) {
+        const dezena = milhar.slice(-2);
+        const dias = dezenaPorDia[dezena];
+        if (!dias) continue;
+        const datas = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? -1 : 1);
+        if (datas.length < 2) continue;
+
+        const idx = datas.indexOf(day.date);
+        if (idx < 1) continue;
+
+        const d1 = datas[idx - 1];
+        const d2 = datas[idx];
+
+        if (diffDays(d1, d2) === 1) {
+          const next = new Date(toDate(d2));
+          next.setDate(next.getDate() + 1);
+          const nd = fmtDate(next);
+
+          if (!datas.includes(nd)) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (next >= today) {
+              palpiteList.push({ dezena, horario: draw.label, datas: [d1, d2], nextDate: nd });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const centenaPalpiteList: { dezena: string; horario: string; datas: string[]; nextDate: string }[] = [];
+  for (const day of sortedDays) {
+    for (const draw of day.draws) {
+      for (const milhar of draw.milhares) {
+        const centena = milhar.slice(1);
+        const dias = centenaPorDia[centena];
+        if (!dias) continue;
+        const datas = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? -1 : 1);
+        if (datas.length < 2) continue;
+
+        const idx = datas.indexOf(day.date);
+        if (idx < 1) continue;
+
+        const d1 = datas[idx - 1];
+        const d2 = datas[idx];
+
+        if (diffDays(d1, d2) === 1) {
+          const next = new Date(toDate(d2));
+          next.setDate(next.getDate() + 1);
+          const nd = fmtDate(next);
+
+          if (!datas.includes(nd)) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (next >= today) {
+              centenaPalpiteList.push({ dezena: centena, horario: draw.label, datas: [d1, d2], nextDate: nd });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const grupoPalpiteList: { dezena: string; horario: string; datas: string[]; nextDate: string }[] = [];
+  for (const day of sortedDays) {
+    for (const draw of day.draws) {
+      for (const milhar of draw.milhares) {
+        const grupo = String(getGrupoIdFromMilhar(milhar));
+        const dias = grupoPorDia[grupo];
+        if (!dias) continue;
+        const datas = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? -1 : 1);
+        if (datas.length < 2) continue;
+
+        const idx = datas.indexOf(day.date);
+        if (idx < 1) continue;
+
+        const d1 = datas[idx - 1];
+        const d2 = datas[idx];
+
+        if (diffDays(d1, d2) === 1) {
+          const next = new Date(toDate(d2));
+          next.setDate(next.getDate() + 1);
+          const nd = fmtDate(next);
+
+          if (!datas.includes(nd)) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (next >= today) {
+              grupoPalpiteList.push({ dezena: grupo, horario: draw.label, datas: [d1, d2], nextDate: nd });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const allM = sortedDays.flatMap(d => d.draws.flatMap(dr => dr.milhares));
+  const gCounts = Array(25).fill(0);
+  allM.forEach(m => { const g = parseInt(m.slice(-2), 10) === 0 ? 25 : Math.ceil(parseInt(m.slice(-2), 10) / 4); gCounts[g - 1]++; });
+  const sortedGC = [...gCounts].sort((a, b) => b - a);
+  const top3Val = sortedGC[2] || 0;
+  const top5Val = sortedGC[4] || 0;
+
+  const calcScore = (dzn: string) => {
+    const dias = dezenaPorDia[dzn];
+    if (!dias) return { score: 0, color: "#ff4466", pct: 0 };
+    const dates = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? 1 : -1);
+    if (dates.length === 0) return { score: 0, color: "#ff4466", pct: 0 };
+
+    let streak = 1, maxStreak = 1;
+    for (let i = 1; i < dates.length; i++) {
+      if (diffDays(dates[i-1], dates[i]) === 1) { streak++; maxStreak = Math.max(maxStreak, streak); }
+      else streak = 1;
+    }
+    const streakPct = maxStreak >= 4 ? 95 : maxStreak === 3 ? 85 : maxStreak === 2 ? 70 : 0;
+    const s1 = (streakPct / 100) * 35;
+
+    const refD = toDate(ultimoDia);
+    let recent = 0;
+    for (let i = 0; i < 7; i++) { const d = new Date(refD); d.setDate(d.getDate() - i); if (dias[fmtDate(d)]) recent++; }
+    const s2 = (recent / 7) * 20;
+
+    const lastDate = dates[dates.length - 1];
+    const daysSince = diffDays(lastDate, ultimoDia);
+    const atrasoPct = daysSince <= 1 ? 30 : daysSince === 2 ? 80 : daysSince === 3 ? 100 : daysSince === 4 ? 90 : daysSince <= 7 ? 60 : 20;
+    const s3 = (atrasoPct / 100) * 15;
+
+    const allH = Object.values(dias).flat();
+    const uniqueH = new Set(allH).size;
+    const hPct = uniqueH === 1 ? 100 : uniqueH === 2 ? 60 : 20;
+    const s4 = (hPct / 100) * 15;
+
+    const gGreen = firmesGreen.some(f => f.dezena === dzn);
+    const gOrange = firmesOrange.some(f => f.dezena === dzn);
+    const s5 = gGreen ? 10 : gOrange ? 5 : 0;
+
+    const dzNum = parseInt(dzn, 10);
+    const gId = dzNum === 0 ? 25 : Math.ceil(dzNum / 4);
+    const gc = gCounts[gId - 1];
+    const gPct = gc >= top3Val ? 100 : gc >= top5Val ? 60 : 20;
+    const s6 = (gPct / 100) * 5;
+
+    const total = Math.round(s1 + s2 + s3 + s4 + s5 + s6);
+    return { score: total, color: total >= 70 ? "#00ff88" : total >= 40 ? "#ff9900" : "#ff4466", pct: total };
+  };
+
+  const calcScoreCentena = (cen: string) => {
+    const dias = centenaPorDia[cen];
+    if (!dias) return { score: 0, color: "#ff4466", pct: 0 };
+    const dates = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? 1 : -1);
+    if (dates.length === 0) return { score: 0, color: "#ff4466", pct: 0 };
+
+    let streak = 1, maxStreak = 1;
+    for (let i = 1; i < dates.length; i++) {
+      if (diffDays(dates[i-1], dates[i]) === 1) { streak++; maxStreak = Math.max(maxStreak, streak); }
+      else streak = 1;
+    }
+    const streakPct = maxStreak >= 4 ? 95 : maxStreak === 3 ? 85 : maxStreak === 2 ? 70 : 0;
+    const s1 = (streakPct / 100) * 40;
+
+    const refD = toDate(ultimoDia);
+    let recent = 0;
+    for (let i = 0; i < 7; i++) { const d = new Date(refD); d.setDate(d.getDate() - i); if (dias[fmtDate(d)]) recent++; }
+    const s2 = (recent / 7) * 20;
+
+    const lastDate = dates[dates.length - 1];
+    const daysSince = diffDays(lastDate, ultimoDia);
+    const atrasoPct = daysSince <= 1 ? 30 : daysSince === 2 ? 80 : daysSince === 3 ? 100 : daysSince === 4 ? 90 : daysSince <= 7 ? 60 : 20;
+    const s3 = (atrasoPct / 100) * 15;
+
+    const allH = Object.values(dias).flat();
+    const uniqueH = new Set(allH).size;
+    const hPct = uniqueH === 1 ? 100 : uniqueH === 2 ? 60 : 20;
+    const s4 = (hPct / 100) * 15;
+
+    const gGreen = firmesGreenCentena.some(f => f.centena === cen);
+    const gOrange = firmesOrangeCentena.some(f => f.centena === cen);
+    const s5 = gGreen ? 10 : gOrange ? 5 : 0;
+
+    const total = Math.round(s1 + s2 + s3 + s4 + s5);
+    return { score: total, color: total >= 70 ? "#00ff88" : total >= 40 ? "#ff9900" : "#ff4466", pct: total };
+  };
+
+  const calcScoreGrupo = (grp: string) => {
+    const dias = grupoPorDia[grp];
+    if (!dias) return { score: 0, color: "#ff4466", pct: 0 };
+    const dates = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? 1 : -1);
+    if (dates.length === 0) return { score: 0, color: "#ff4466", pct: 0 };
+
+    let streak = 1, maxStreak = 1;
+    for (let i = 1; i < dates.length; i++) {
+      if (diffDays(dates[i-1], dates[i]) === 1) { streak++; maxStreak = Math.max(maxStreak, streak); }
+      else streak = 1;
+    }
+    const streakPct = maxStreak >= 4 ? 95 : maxStreak === 3 ? 85 : maxStreak === 2 ? 70 : 0;
+    const s1 = (streakPct / 100) * 40;
+
+    const refD = toDate(ultimoDia);
+    let recent = 0;
+    for (let i = 0; i < 7; i++) { const d = new Date(refD); d.setDate(d.getDate() - i); if (dias[fmtDate(d)]) recent++; }
+    const s2 = (recent / 7) * 20;
+
+    const lastDate = dates[dates.length - 1];
+    const daysSince = diffDays(lastDate, ultimoDia);
+    const atrasoPct = daysSince <= 1 ? 30 : daysSince === 2 ? 80 : daysSince === 3 ? 100 : daysSince === 4 ? 90 : daysSince <= 7 ? 60 : 20;
+    const s3 = (atrasoPct / 100) * 15;
+
+    const allH = Object.values(dias).flat();
+    const uniqueH = new Set(allH).size;
+    const hPct = uniqueH === 1 ? 100 : uniqueH === 2 ? 60 : 20;
+    const s4 = (hPct / 100) * 15;
+
+    const gGreen = firmesGreenGrupo.some(f => f.grupo === grp);
+    const gOrange = firmesOrangeGrupo.some(f => f.grupo === grp);
+    const s5 = gGreen ? 10 : gOrange ? 5 : 0;
+
+    const total = Math.round(s1 + s2 + s3 + s4 + s5);
+    return { score: total, color: total >= 70 ? "#00ff88" : total >= 40 ? "#ff9900" : "#ff4466", pct: total };
+  };
+
+  const grouped: Record<string, typeof palpiteList> = {};
+  for (const p of palpiteList) {
+    if (!grouped[p.horario]) grouped[p.horario] = [];
+    grouped[p.horario].push(p);
+  }
+
+  const centenaGrouped: Record<string, typeof centenaPalpiteList> = {};
+  for (const p of centenaPalpiteList) {
+    if (!centenaGrouped[p.horario]) centenaGrouped[p.horario] = [];
+    centenaGrouped[p.horario].push(p);
+  }
+
+  const grupoGrouped: Record<string, typeof grupoPalpiteList> = {};
+  for (const p of grupoPalpiteList) {
+    if (!grupoGrouped[p.horario]) grupoGrouped[p.horario] = [];
+    grupoGrouped[p.horario].push(p);
+  }
+
+  return { sortedDays, toDate, fmtDate, diffDays, dezenaPorDia, centenaPorDia, grupoPorDia, ultimoDia, ultimos4Dias, firmesGreen, firmesOrange, firmesGreenCentena, firmesOrangeCentena, firmesGreenGrupo, firmesOrangeGrupo, palpiteList, centenaPalpiteList, grupoPalpiteList, calcScore, calcScoreCentena, calcScoreGrupo, grouped, centenaGrouped, grupoGrouped, gCounts };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENTE PRINCIPAL
@@ -583,6 +951,9 @@ export default function App() {
   const [cloudStatus, setCloudStatus] = useState("Nuvem: conectando...");
   const hasLoadedFromCloud = useRef(false);
   const hasClearedLocalSeed = useRef(false);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const predictionsRef = useRef<Prediction[]>([]);
+  const [tipoPalpite, setTipoPalpite] = useState<"dezena" | "centena" | "grupo">("dezena");
 
   // Referência para pular de campo automaticamente
   const inputRefs = useRef([]);
@@ -1133,6 +1504,98 @@ export default function App() {
 
     return () => clearTimeout(timeout);
   }, [days]);
+
+  // Load predictions from cloud
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const data = await loadPredictions();
+        if (alive) setPredictions(data.map(p => ({ ...p, tipo: p.tipo || "dezena" as const })));
+      } catch (err) {
+        console.error("Erro ao carregar predictions:", err);
+      }
+    }
+    load();
+    return () => { alive = false; };
+  }, []);
+
+  // Keep predictions ref in sync
+  useEffect(() => {
+    predictionsRef.current = predictions;
+  }, [predictions]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // dados dos palpites (memoized)
+  const predData = useMemo(() => computePredictionData(days), [days]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Auto-check pendentes + gerar novas predictions
+  useEffect(() => {
+    if (!hasLoadedFromCloud.current || days.length === 0) return;
+
+    const timeout = setTimeout(async () => {
+      try {
+        const prev = predictionsRef.current;
+        let changed = false;
+
+        // 1. Verificar predictions pendentes contra days atuais
+        const updated = prev.map(p => {
+          if (p.result !== "pending") return p;
+          const day = days.find(d => d.date === p.dataPrevista);
+          if (!day) return p;
+          const draw = day.draws.find(d => d.label === p.horario);
+          if (!draw) return p;
+          const hit = draw.milhares.some(m =>
+            p.tipo === "centena" ? m.slice(1) === p.dezena : p.tipo === "grupo" ? String(getGrupoIdFromMilhar(m)) === p.dezena : m.slice(-2) === p.dezena
+          );
+          changed = true;
+          return { ...p, result: hit ? "hit" as const : "miss" as const };
+        });
+
+        // 2. Gerar novas predictions do palpiteList
+        const today = new Date();
+        const dd = String(today.getDate()).padStart(2, "0");
+        const mm = String(today.getMonth() + 1).padStart(2, "0");
+        const yyyy = today.getFullYear();
+        const todayStr = `${dd}/${mm}/${yyyy}`;
+
+        const addPredictions = (list: typeof predData.palpiteList, tipo: "dezena" | "centena" | "grupo", calcFn: typeof predData.calcScore) => {
+          for (const p of list) {
+            const key = `${tipo}|${p.dezena}|${p.horario}|${p.nextDate}`;
+            const exists = updated.some(e => `${e.tipo}|${e.dezena}|${e.horario}|${e.dataPrevista}` === key);
+            if (!exists) {
+              const sc = calcFn(p.dezena);
+              updated.push({
+                id: `pred_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                tipo,
+                dezena: p.dezena,
+                horario: p.horario,
+                dataPrevista: p.nextDate,
+                score: sc.score,
+                dataCriacao: todayStr,
+                result: "pending",
+              });
+              changed = true;
+            }
+          }
+        };
+
+        addPredictions(predData.palpiteList, "dezena", predData.calcScore);
+        addPredictions(predData.centenaPalpiteList, "centena", predData.calcScoreCentena);
+        addPredictions(predData.grupoPalpiteList, "grupo", predData.calcScoreGrupo);
+
+        if (changed) {
+          setPredictions(updated);
+          await savePredictions(updated);
+        }
+      } catch (err) {
+        console.error("Erro ao sincronizar predictions:", err);
+      }
+    }, 800);
+
+    return () => clearTimeout(timeout);
+  }, [days, predData]);
 
   // --- DADOS DO DIA ---
   const currentDay = useMemo(
@@ -3425,212 +3888,137 @@ export default function App() {
             PALPITES - REPETIÇÃO SEQUENCIAL
           </h2>
           {(() => {
-            // Ordenar dias cronologicamente
-            const sortedDays = [...days].sort((a, b) => {
-              const [da, ma, ya] = a.date.split("/").map(Number);
-              const [db, mb, yb] = b.date.split("/").map(Number);
-              return new Date(ya, ma - 1, da).getTime() - new Date(yb, mb - 1, db).getTime();
+            const { firmesGreen, firmesOrange, grouped, calcScore, firmesGreenCentena, firmesOrangeCentena, centenaGrouped, calcScoreCentena, firmesGreenGrupo, firmesOrangeGrupo, grupoGrouped, calcScoreGrupo } = predData;
+            const horarios = ["02HS", "08HS", "10HS", "12HS", "15HS", "17HS", "21HS", "23HS"];
+
+            const filteredPredictions = predictions.filter(p => p.tipo === tipoPalpite);
+
+            const total = filteredPredictions.length;
+            const hits = filteredPredictions.filter(p => p.result === "hit").length;
+            const misses = filteredPredictions.filter(p => p.result === "miss").length;
+            const pending = filteredPredictions.filter(p => p.result === "pending").length;
+            const resolved = hits + misses;
+            const hitPct = resolved > 0 ? Math.round((hits / resolved) * 100) : 0;
+
+            const scoreRanges = [
+              { label: "70-100%", min: 70, max: 100 },
+              { label: "40-69%", min: 40, max: 69 },
+              { label: "0-39%", min: 0, max: 39 },
+            ];
+            const rangeStats = scoreRanges.map(r => {
+              const inRange = filteredPredictions.filter(p => p.score >= r.min && p.score <= r.max);
+              const rangeHits = inRange.filter(p => p.result === "hit").length;
+              const rangeTotal = inRange.filter(p => p.result !== "pending").length;
+              return { ...r, hits: rangeHits, total: rangeTotal, pct: rangeTotal > 0 ? Math.round((rangeHits / rangeTotal) * 100) : 0 };
             });
 
-            const toDate = (s: string) => {
-              const [d, m, y] = s.split("/").map(Number);
-              return new Date(y, m - 1, d);
-            };
-            const fmtDate = (dt: Date) =>
-              `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
-            const diffDays = (a: string, b: string) =>
-              (toDate(b).getTime() - toDate(a).getTime()) / (1000 * 60 * 60 * 24);
+            const lastPredictions = [...filteredPredictions]
+              .sort((a, b) => {
+                const [dA, mA, yA] = a.dataPrevista.split("/").map(Number);
+                const [dB, mB, yB] = b.dataPrevista.split("/").map(Number);
+                return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
+              })
+              .slice(0, 20);
 
-            // Agrupar dezenas por dia (qualquer horário)
-            const dezenaPorDia: Record<string, Record<string, string[]>> = {};
-
-            for (const day of sortedDays) {
-              for (const draw of day.draws) {
-                for (const milhar of draw.milhares) {
-                  const dezena = milhar.slice(-2);
-                  if (!dezenaPorDia[dezena]) dezenaPorDia[dezena] = {};
-                  if (!dezenaPorDia[dezena][day.date]) dezenaPorDia[dezena][day.date] = [];
-                  if (!dezenaPorDia[dezena][day.date].includes(draw.label)) {
-                    dezenaPorDia[dezena][day.date].push(draw.label);
-                  }
-                }
-              }
-            }
-
-            // Última data inserida no sistema
-            const ultimoDia = sortedDays.length > 0 ? sortedDays[sortedDays.length - 1].date : "";
-
-            // Gerar lista dos últimos 4 dias
-            const ultimos4Dias: string[] = [];
-            if (ultimoDia) {
-              const ref = toDate(ultimoDia);
-              for (let j = 3; j >= 0; j--) {
-                const d = new Date(ref);
-                d.setDate(d.getDate() - j);
-                ultimos4Dias.push(fmtDate(d));
-              }
-            }
-
-            // Dezenas que apareceram em TODOS os 4 dias
-            const firmesGreen = ultimoDia
-              ? Object.entries(dezenaPorDia)
-                  .filter(([_, dias]) => ultimos4Dias.every(d => dias[d]))
-                  .map(([dezena, dias]) => ({
-                    dezena,
-                    datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] })),
-                  }))
-              : [];
-
-            // Dezenas que apareceram em 3 dos 4 dias (falhou 1)
-            const firmesOrange = ultimoDia
-              ? Object.entries(dezenaPorDia)
-                  .filter(([_, dias]) => {
-                    const presentes = ultimos4Dias.filter(d => dias[d]).length;
-                    return presentes === 3;
-                  })
-                  .map(([dezena, dias]) => ({
-                    dezena,
-                    datas: ultimos4Dias.map(d => ({ date: d, horarios: dias[d] || [] })),
-                  }))
-              : [];
-
-            // Detectar repetições em 2 dias consecutivos (previsão)
-            const palpiteList: { dezena: string; horario: string; datas: string[]; nextDate: string }[] = [];
-
-            for (const day of sortedDays) {
-              for (const draw of day.draws) {
-                for (const milhar of draw.milhares) {
-                  const dezena = milhar.slice(-2);
-                  const dias = dezenaPorDia[dezena];
-                  if (!dias) continue;
-                  const datas = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? -1 : 1);
-                  if (datas.length < 2) continue;
-
-                  const idx = datas.indexOf(day.date);
-                  if (idx < 1) continue;
-
-                  const d1 = datas[idx - 1];
-                  const d2 = datas[idx];
-
-                  if (diffDays(d1, d2) === 1) {
-                    const next = new Date(toDate(d2));
-                    next.setDate(next.getDate() + 1);
-                    const nd = fmtDate(next);
-
-                    if (!datas.includes(nd)) {
-                      const today = new Date();
-                      today.setHours(0, 0, 0, 0);
-                      if (next >= today) {
-                        palpiteList.push({ dezena, horario: draw.label, datas: [d1, d2], nextDate: nd });
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            // ── Score de Confiança ──
-            const allM = sortedDays.flatMap(d => d.draws.flatMap(dr => dr.milhares));
-            const gCounts = Array(25).fill(0);
-            allM.forEach(m => { const g = parseInt(m.slice(-2), 10) === 0 ? 25 : Math.ceil(parseInt(m.slice(-2), 10) / 4); gCounts[g - 1]++; });
-            const sortedGC = [...gCounts].sort((a, b) => b - a);
-            const top3Val = sortedGC[2] || 0;
-            const top5Val = sortedGC[4] || 0;
-
-            const calcScore = (dzn: string) => {
-              const dias = dezenaPorDia[dzn];
-              if (!dias) return { score: 0, color: red, pct: 0 };
-              const dates = Object.keys(dias).sort((a, b) => diffDays(a, b) > 0 ? 1 : -1);
-              if (dates.length === 0) return { score: 0, color: red, pct: 0 };
-
-              let streak = 1, maxStreak = 1;
-              for (let i = 1; i < dates.length; i++) {
-                if (diffDays(dates[i-1], dates[i]) === 1) { streak++; maxStreak = Math.max(maxStreak, streak); }
-                else streak = 1;
-              }
-              const streakPct = maxStreak >= 4 ? 95 : maxStreak === 3 ? 85 : maxStreak === 2 ? 70 : 0;
-              const s1 = (streakPct / 100) * 35;
-
-              const refD = toDate(ultimoDia);
-              let recent = 0;
-              for (let i = 0; i < 7; i++) { const d = new Date(refD); d.setDate(d.getDate() - i); if (dias[fmtDate(d)]) recent++; }
-              const s2 = (recent / 7) * 20;
-
-              const lastDate = dates[dates.length - 1];
-              const daysSince = diffDays(lastDate, ultimoDia);
-              const atrasoPct = daysSince <= 1 ? 30 : daysSince === 2 ? 80 : daysSince === 3 ? 100 : daysSince === 4 ? 90 : daysSince <= 7 ? 60 : 20;
-              const s3 = (atrasoPct / 100) * 15;
-
-              const allH = Object.values(dias).flat();
-              const uniqueH = new Set(allH).size;
-              const hPct = uniqueH === 1 ? 100 : uniqueH === 2 ? 60 : 20;
-              const s4 = (hPct / 100) * 15;
-
-              const gGreen = firmesGreen.some(f => f.dezena === dzn);
-              const gOrange = firmesOrange.some(f => f.dezena === dzn);
-              const s5 = gGreen ? 10 : gOrange ? 5 : 0;
-
-              const dzNum = parseInt(dzn, 10);
-              const gId = dzNum === 0 ? 25 : Math.ceil(dzNum / 4);
-              const gc = gCounts[gId - 1];
-              const gPct = gc >= top3Val ? 100 : gc >= top5Val ? 60 : 20;
-              const s6 = (gPct / 100) * 5;
-
-              const total = Math.round(s1 + s2 + s3 + s4 + s5 + s6);
-              return { score: total, color: total >= 70 ? green : total >= 40 ? orange : red, pct: total };
-            };
-
-            // Agrupar por horário
-            const grouped: Record<string, typeof palpiteList> = {};
-            for (const p of palpiteList) {
-              if (!grouped[p.horario]) grouped[p.horario] = [];
-              grouped[p.horario].push(p);
-            }
-
-            const horarios = ["02HS", "08HS", "10HS", "12HS", "15HS", "17HS", "21HS", "23HS"];
+            const isGrupo = tipoPalpite === "grupo";
+            const isCentena = tipoPalpite === "centena";
+            const activeFirmesGreen = isGrupo ? firmesGreenGrupo : isCentena ? firmesGreenCentena : firmesGreen;
+            const activeFirmesOrange = isGrupo ? firmesOrangeGrupo : isCentena ? firmesOrangeCentena : firmesOrange;
+            const activeGrouped = isGrupo ? grupoGrouped : isCentena ? centenaGrouped : grouped;
+            const activeCalcScore = isGrupo ? calcScoreGrupo : isCentena ? calcScoreCentena : calcScore;
+            const label = isGrupo ? "GRUPOS" : isCentena ? "CENTENAS" : "DEZENAS";
 
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-                {/* ── DEZENAS FIRMES 4/4 ── */}
-                {firmesGreen.length > 0 && (
+
+                {/* ── TOGGLE ── */}
+                <div style={{ display: "flex", justifyContent: "center", gap: "8px", marginBottom: "4px" }}>
+                  {(["grupo", "dezena", "centena"] as const).map(t => (
+                    <button key={t} onClick={() => setTipoPalpite(t)} style={{
+                      background: tipoPalpite === t ? "#1a1a2e" : "transparent",
+                      border: `1px solid ${tipoPalpite === t ? orange : bdr}`,
+                      borderRadius: "6px",
+                      padding: "6px 16px",
+                      fontFamily: bebas,
+                      fontSize: "0.9rem",
+                      letterSpacing: "2px",
+                      color: tipoPalpite === t ? orange : dim,
+                      cursor: "pointer",
+                    }}>
+                      {t === "grupo" ? "🐾 GRUPOS" : t === "dezena" ? "🔢 DEZENAS" : "🔢 CENTENAS"}
+                    </button>
+                  ))}
+                </div>
+
+                {/* ── FIRMES 4/4 ── */}
+                {activeFirmesGreen.length > 0 && (
                   <div style={{ background: panel, border: `1px solid ${green}`, borderRadius: "10px", padding: "16px" }}>
                     <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: green, marginBottom: "14px", textAlign: "center" }}>
-                      🔥 DEZENAS FIRMES (4/4)
+                      🔥 {label} FIRMES (4/4)
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", justifyContent: "center" }}>
-                      {firmesGreen.map((s, i) => {
-                        const sc = calcScore(s.dezena);
-                        const dezenaNum = parseInt(s.dezena, 10);
+                      {activeFirmesGreen.map((s, i) => {
+                        const key = s.dezena ?? s.centena ?? s.grupo;
+                        const sc = activeCalcScore(key);
+                        if (isGrupo) {
+                          const animal = ANIMAIS[parseInt(key, 10) - 1];
+                          return (
+                            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+                              <div style={{ width: "68px", height: "68px", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "transparent", border: `2px solid ${green}` }}>
+                                <span style={{ fontSize: "1.3rem", lineHeight: 1 }}>{animal?.emoji}</span>
+                                <span style={{ fontFamily: bebas, fontSize: "0.7rem", color: "#fff", letterSpacing: "0px", lineHeight: 1 }}>{animal?.nome}</span>
+                              </div>
+                              <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { date: string }) => d.date.split("/")[0]).join(" ")}
+                              </div>
+                              <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { horarios: string[] }) => d.horarios.join(" ")).join(" ")}
+                              </div>
+                              <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
+                                <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
+                              </div>
+                              <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>{sc.score}%</div>
+                            </div>
+                          );
+                        }
+                        if (isCentena) {
+                          return (
+                            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+                              <div style={{ width: "68px", height: "68px", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "transparent", border: `2px solid ${green}` }}>
+                                <span style={{ fontFamily: bebas, fontSize: "1.2rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{key}</span>
+                              </div>
+                              <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { date: string }) => d.date.split("/")[0]).join(" ")}
+                              </div>
+                              <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { horarios: string[] }) => d.horarios.join(" ")).join(" ")}
+                              </div>
+                              <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
+                                <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
+                              </div>
+                              <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>{sc.score}%</div>
+                            </div>
+                          );
+                        }
+                        const dezenaNum = parseInt(key, 10);
                         const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
                         const animal = ANIMAIS[grupoId - 1];
                         return (
                           <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
-                            <div style={{
-                              width: "68px",
-                              height: "68px",
-                              borderRadius: "50%",
-                              display: "flex",
-                              flexDirection: "column",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              background: "transparent",
-                              border: `2px solid ${green}`,
-                            }}>
+                            <div style={{ width: "68px", height: "68px", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "transparent", border: `2px solid ${green}` }}>
                               <span style={{ fontSize: "1.3rem", lineHeight: 1 }}>{animal?.emoji}</span>
-                              <span style={{ fontFamily: bebas, fontSize: "1rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{s.dezena}</span>
+                              <span style={{ fontFamily: bebas, fontSize: "1rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{key}</span>
                             </div>
                             <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
-                              {s.datas.map(d => d.date.split("/")[0]).join(" ")}
+                              {s.datas.map((d: { date: string }) => d.date.split("/")[0]).join(" ")}
                             </div>
                             <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
-                              {s.datas.map(d => d.horarios.join(" ")).join(" ")}
+                              {s.datas.map((d: { horarios: string[] }) => d.horarios.join(" ")).join(" ")}
                             </div>
                             <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
                               <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
                             </div>
-                            <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>
-                              {sc.score}%
-                            </div>
+                            <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>{sc.score}%</div>
                           </div>
                         );
                       })}
@@ -3638,52 +4026,85 @@ export default function App() {
                   </div>
                 )}
 
-                {/* ── DEZENAS FIRMES 3/4 ── */}
-                {firmesOrange.length > 0 && (
+                {/* ── FIRMES 3/4 ── */}
+                {activeFirmesOrange.length > 0 && (
                   <div style={{ background: panel, border: `1px solid ${orange}`, borderRadius: "10px", padding: "16px" }}>
                     <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: orange, marginBottom: "14px", textAlign: "center" }}>
-                      🔥 DEZENAS FIRMES (3/4)
+                      🔥 {label} FIRMES (3/4)
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", justifyContent: "center" }}>
-                      {firmesOrange.map((s, i) => {
-                        const sc = calcScore(s.dezena);
-                        const dezenaNum = parseInt(s.dezena, 10);
+                      {activeFirmesOrange.map((s, i) => {
+                        const key = s.dezena ?? s.centena ?? s.grupo;
+                        const sc = activeCalcScore(key);
+                        const diaFaltou = s.datas.find((d: { horarios: string[] }) => d.horarios.length === 0);
+                        if (isGrupo) {
+                          const animal = ANIMAIS[parseInt(key, 10) - 1];
+                          return (
+                            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+                              <div style={{ width: "68px", height: "68px", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "transparent", border: `2px solid ${orange}` }}>
+                                <span style={{ fontSize: "1.3rem", lineHeight: 1 }}>{animal?.emoji}</span>
+                                <span style={{ fontFamily: bebas, fontSize: "0.7rem", color: "#fff", letterSpacing: "0px", lineHeight: 1 }}>{animal?.nome}</span>
+                              </div>
+                              <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { date: string }) => d.date.split("/")[0]).join(" ")}
+                              </div>
+                              <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { horarios: string[] }) => d.horarios.join(" ")).join(" ")}
+                              </div>
+                              {diaFaltou && (
+                                <div style={{ fontSize: "0.6rem", color: orange, textAlign: "center" }}>Faltou: {diaFaltou.date}</div>
+                              )}
+                              <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
+                                <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
+                              </div>
+                              <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>{sc.score}%</div>
+                            </div>
+                          );
+                        }
+                        if (isCentena) {
+                          return (
+                            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+                              <div style={{ width: "68px", height: "68px", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "transparent", border: `2px solid ${orange}` }}>
+                                <span style={{ fontFamily: bebas, fontSize: "1.2rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{key}</span>
+                              </div>
+                              <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { date: string }) => d.date.split("/")[0]).join(" ")}
+                              </div>
+                              <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
+                                {s.datas.map((d: { horarios: string[] }) => d.horarios.join(" ")).join(" ")}
+                              </div>
+                              {diaFaltou && (
+                                <div style={{ fontSize: "0.6rem", color: orange, textAlign: "center" }}>Faltou: {diaFaltou.date}</div>
+                              )}
+                              <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
+                                <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
+                              </div>
+                              <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>{sc.score}%</div>
+                            </div>
+                          );
+                        }
+                        const dezenaNum = parseInt(key, 10);
                         const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
                         const animal = ANIMAIS[grupoId - 1];
-                        const diaFaltou = s.datas.find(d => d.horarios.length === 0);
                         return (
                           <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
-                            <div style={{
-                              width: "68px",
-                              height: "68px",
-                              borderRadius: "50%",
-                              display: "flex",
-                              flexDirection: "column",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              background: "transparent",
-                              border: `2px solid ${orange}`,
-                            }}>
+                            <div style={{ width: "68px", height: "68px", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "transparent", border: `2px solid ${orange}` }}>
                               <span style={{ fontSize: "1.3rem", lineHeight: 1 }}>{animal?.emoji}</span>
-                              <span style={{ fontFamily: bebas, fontSize: "1rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{s.dezena}</span>
+                              <span style={{ fontFamily: bebas, fontSize: "1rem", color: "#fff", letterSpacing: "1px", lineHeight: 1 }}>{key}</span>
                             </div>
                             <div style={{ fontSize: "0.8rem", color: "#fff", textAlign: "center", whiteSpace: "nowrap" }}>
-                              {s.datas.map(d => d.date.split("/")[0]).join(" ")}
+                              {s.datas.map((d: { date: string }) => d.date.split("/")[0]).join(" ")}
                             </div>
                             <div style={{ fontSize: "0.65rem", color: "#ffffffcc", textAlign: "center", whiteSpace: "nowrap" }}>
-                              {s.datas.map(d => d.horarios.join(" ")).join(" ")}
+                              {s.datas.map((d: { horarios: string[] }) => d.horarios.join(" ")).join(" ")}
                             </div>
                             {diaFaltou && (
-                              <div style={{ fontSize: "0.6rem", color: orange, textAlign: "center" }}>
-                                Faltou: {diaFaltou.date}
-                              </div>
+                              <div style={{ fontSize: "0.6rem", color: orange, textAlign: "center" }}>Faltou: {diaFaltou.date}</div>
                             )}
                             <div style={{ width: "60px", height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden" }}>
                               <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "2px" }} />
                             </div>
-                            <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>
-                              {sc.score}%
-                            </div>
+                            <div style={{ fontSize: "0.6rem", color: sc.color, fontFamily: bebas, letterSpacing: "1px", lineHeight: 1 }}>{sc.score}%</div>
                           </div>
                         );
                       })}
@@ -3696,47 +4117,159 @@ export default function App() {
                   <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: orange, marginBottom: "14px", textAlign: "center" }}>
                     📊 PREVISÕES (REPETIÇÃO EM 2 DIAS)
                   </div>
-                  {horarios.map((h) => {
-                    const items = grouped[h] || [];
+                  {(() => {
+                    const allItems = horarios.flatMap(h => (activeGrouped[h] || []).map(p => ({ ...p, horarioLabel: h })));
+                    const sorted = [...allItems].sort((a, b) => {
+                      const hi = horarios.indexOf(a.horarioLabel);
+                      const hj = horarios.indexOf(b.horarioLabel);
+                      if (hi !== hj) return hi - hj;
+                      return activeCalcScore(b.dezena).score - activeCalcScore(a.dezena).score;
+                    });
+                    if (sorted.length === 0) {
+                      return <div style={{ color: dim, fontSize: "0.8rem", textAlign: "center" }}>Nenhuma repetição detectada</div>;
+                    }
                     return (
-                      <div key={h} style={{ marginBottom: "12px" }}>
-                        <div style={{ fontFamily: bebas, fontSize: "1rem", letterSpacing: "2px", color: yellow, marginBottom: "8px" }}>
-                          {h} ({items.length})
-                        </div>
-                        {items.length === 0 ? (
-                          <div style={{ color: dim, fontSize: "0.8rem", marginBottom: "10px" }}>Nenhuma repetição detectada</div>
-                        ) : (
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-                            {[...items].sort((a, b) => calcScore(b.dezena).score - calcScore(a.dezena).score).map((p, i) => {
-                              const sc = calcScore(p.dezena);
-                              const dezenaNum = parseInt(p.dezena, 10);
-                              const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
-                              const animal = ANIMAIS[grupoId - 1];
-                              return (
-                                <div key={i} style={{ background: "#1a1a2e", border: `1px solid ${sc.color}`, borderRadius: "8px", padding: "10px 14px", textAlign: "center" }}>
-                                  <div style={{ fontFamily: bebas, fontSize: "1.4rem", color: "#fff", letterSpacing: "2px" }}>
-                                    {animal?.emoji} {p.dezena}
-                                  </div>
-                                  <div style={{ width: "100%", height: "5px", background: "#2a2a3e", borderRadius: "3px", marginTop: "6px", overflow: "hidden" }}>
-                                    <div style={{ width: `${sc.pct}%`, height: "100%", background: sc.color, borderRadius: "3px" }} />
-                                  </div>
-                                  <div style={{ fontSize: "0.65rem", color: sc.color, marginTop: "2px", fontFamily: bebas, letterSpacing: "1px" }}>
-                                    {sc.score}% Confiança
-                                  </div>
-                                  <div style={{ fontSize: "0.7rem", color: "#fff", marginTop: "4px" }}>
-                                    {p.datas.join(" → ")}
-                                  </div>
-                                  <div style={{ fontSize: "0.75rem", color: orange, marginTop: "4px" }}>
-                                    Próximo: {p.nextDate}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                        {sorted.map((p, i) => {
+                          const sc = activeCalcScore(p.dezena);
+                          const grupHtml = isGrupo ? (() => {
+                            const animal = ANIMAIS[parseInt(p.dezena, 10) - 1];
+                            return { emoji: animal?.emoji, nome: animal?.nome };
+                          })() : null;
+                          const emoji = isCentena ? null : (() => {
+                            const dezenaNum = parseInt(p.dezena, 10);
+                            const grupoId = dezenaNum === 0 ? 25 : Math.ceil(dezenaNum / 4);
+                            return ANIMAIS[grupoId - 1]?.emoji;
+                          })();
+                          return (
+                            <div key={i} style={{
+                              background: "#1a1a2e",
+                              border: `1px solid ${sc.color}`,
+                              borderRadius: "6px",
+                              padding: "4px 10px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              whiteSpace: "nowrap",
+                              fontSize: "0.8rem",
+                              fontFamily: bebas,
+                              letterSpacing: "1px",
+                            }}>
+                              <span style={{ color: "#fff" }}>{grupHtml ? `${grupHtml.emoji} ${grupHtml.nome}` : emoji ? `${emoji} ` : ""}{!grupHtml ? p.dezena : ""}</span>
+                              <span style={{ color: sc.color }}>{sc.score}%</span>
+                              <span style={{ color: "#ffffffaa", fontSize: "0.7rem" }}>{p.horarioLabel}</span>
+                              <span style={{ color: orange, fontSize: "0.7rem" }}>{p.nextDate}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     );
-                  })}
+                  })()}
+                </div>
+
+                {/* ── HISTÓRICO DE ACERTOS ── */}
+                <div style={{ background: panel, border: `1px solid ${bdr}`, borderRadius: "10px", padding: "16px" }}>
+                  <div style={{ fontFamily: bebas, fontSize: "1.2rem", letterSpacing: "2px", color: orange, marginBottom: "14px", textAlign: "center" }}>
+                    📊 HISTÓRICO DE ACERTOS - {label}
+                  </div>
+
+                  {/* Total stats */}
+                  <div style={{ display: "flex", justifyContent: "center", gap: "24px", marginBottom: "16px", flexWrap: "wrap" }}>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontFamily: bebas, fontSize: "1.6rem", color: "#fff", letterSpacing: "2px" }}>{resolved}</div>
+                      <div style={{ fontSize: "0.65rem", color: dim }}>RESOLVIDAS</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontFamily: bebas, fontSize: "1.6rem", color: green, letterSpacing: "2px" }}>{hits}</div>
+                      <div style={{ fontSize: "0.65rem", color: dim }}>ACERTOS</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontFamily: bebas, fontSize: "1.6rem", color: red, letterSpacing: "2px" }}>{misses}</div>
+                      <div style={{ fontSize: "0.65rem", color: dim }}>ERROS</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontFamily: bebas, fontSize: "1.6rem", color: yellow, letterSpacing: "2px" }}>{hitPct}%</div>
+                      <div style={{ fontSize: "0.65rem", color: dim }}>APROVEITAMENTO</div>
+                    </div>
+                    {pending > 0 && (
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontFamily: bebas, fontSize: "1.1rem", color: dim, letterSpacing: "2px" }}>{pending}</div>
+                        <div style={{ fontSize: "0.65rem", color: dim }}>PENDENTES</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Score range breakdown */}
+                  <div style={{ marginBottom: "16px" }}>
+                    <div style={{ fontFamily: bebas, fontSize: "0.9rem", letterSpacing: "1px", color: dim, marginBottom: "8px", textAlign: "center" }}>
+                      ─ POR CONFIANÇA ─
+                    </div>
+                    {rangeStats.map((r, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                        <span style={{ fontSize: "0.7rem", color: dim, width: "50px", textAlign: "right" }}>{r.label}</span>
+                        <div style={{ flex: 1, height: "14px", background: "#2a2a3e", borderRadius: "3px", overflow: "hidden", position: "relative" }}>
+                          <div style={{ width: `${r.pct}%`, height: "100%", background: r.pct >= 50 ? green : r.pct >= 30 ? orange : red, borderRadius: "3px", transition: "width 0.3s" }} />
+                        </div>
+                        <span style={{ fontSize: "0.7rem", color: r.pct >= 50 ? green : r.pct >= 30 ? orange : red, width: "80px" }}>
+                          {r.hits}/{r.total} ({r.pct}%)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Last predictions */}
+                  <div>
+                    <div style={{ fontFamily: bebas, fontSize: "0.9rem", letterSpacing: "1px", color: dim, marginBottom: "8px", textAlign: "center" }}>
+                      ─ ÚLTIMAS PREVISÕES ─
+                    </div>
+                    {lastPredictions.length === 0 ? (
+                      <div style={{ color: dim, fontSize: "0.8rem", textAlign: "center", padding: "10px" }}>
+                        Nenhuma previsão salva ainda. As previsões serão geradas automaticamente ao adicionar resultados.
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        {lastPredictions.map((p) => {
+                          const isCen = p.tipo === "centena";
+                          const isGrp = p.tipo === "grupo";
+                          const dzNum = parseInt(p.dezena, 10);
+                          const gId = isNaN(dzNum) ? 1 : dzNum === 0 ? 25 : Math.ceil(dzNum / 4);
+                          const animal = isCen ? null : isGrp ? ANIMAIS[dzNum - 1] : ANIMAIS[gId - 1];
+                          const statusColor = p.result === "hit" ? green : p.result === "miss" ? red : dim;
+                          const statusIcon = p.result === "hit" ? "✅" : p.result === "miss" ? "❌" : "⏳";
+                          return (
+                            <div key={p.id} style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              background: "#1a1a2e",
+                              border: `1px solid ${p.result === "hit" ? green : p.result === "miss" ? red : bdr}`,
+                              borderRadius: "6px",
+                              padding: "6px 10px",
+                              fontSize: "0.75rem",
+                            }}>
+                              <span style={{ width: "20px", textAlign: "center" }}>{statusIcon}</span>
+                              {animal && (
+                                <span style={{ fontFamily: bebas, fontSize: "0.9rem", color: "#fff", letterSpacing: "1px", width: "28px" }}>
+                                  {animal.emoji}
+                                </span>
+                              )}
+                              <span style={{ fontFamily: bebas, fontSize: "0.9rem", color: "#fff", letterSpacing: "1px" }}>
+                                {isGrp ? animal?.nome || p.dezena : p.dezena}
+                              </span>
+                              <span style={{ color: dim }}>{p.horario}</span>
+                              <span style={{ color: dim }}>{p.dataPrevista}</span>
+                              <div style={{ flex: 1, height: "4px", background: "#2a2a3e", borderRadius: "2px", overflow: "hidden", maxWidth: "40px" }}>
+                                <div style={{ width: `${p.score}%`, height: "100%", background: p.score >= 70 ? green : p.score >= 40 ? orange : red, borderRadius: "2px" }} />
+                              </div>
+                              <span style={{ color: statusColor, fontFamily: bebas, letterSpacing: "1px", textAlign: "right" }}>
+                                {p.score}%
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             );

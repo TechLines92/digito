@@ -260,7 +260,7 @@ export function Game({ days }: GameProps) {
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [betType, setBetType] = useState<"grupo" | "dezena" | "centena" | "milhar">("grupo");
-  const [scope, setScope] = useState<"cabeca" | "1-5" | "1-10">("cabeca");
+  const [scope, setScope] = useState<"cabeca" | "1-5" | "1-10">("1-5");
   const [betValue, setBetValue] = useState("");
   const [selectedAnimals, setSelectedAnimals] = useState<number[]>([]);
   const [betAmount, setBetAmount] = useState("");
@@ -571,6 +571,32 @@ export function Game({ days }: GameProps) {
     setBetMessage(label);
   }
 
+  function handleCancelBet(betId: string) {
+    if (!gameData || !currentUser) return;
+    if (currentUser.name !== "Luan") return;
+
+    const bet = gameData.bets.find((b) => b.id === betId);
+    if (!bet) return;
+    if (bet.settled) return;
+
+    const confirmMsg = `Cancelar aposta de ${bet.userPassword === currentUser.password ? "Luan" : gameData.users.find(u => u.password === bet.userPassword)?.name || "outro"} ${bet.betType.toUpperCase()} ${bet.betValue} (${bet.amount} pts) no ${bet.drawLabel}?`;
+    if (!confirm(confirmMsg)) return;
+
+    const updatedBets = gameData.bets.filter((b) => b.id !== betId);
+    const updatedUsers = gameData.users.map((u) => {
+      if (u.password === bet.userPassword) return { ...u, points: u.points + bet.amount };
+      if (u.password === "admin") return { ...u, points: u.points - bet.amount };
+      return u;
+    });
+
+    const newData: GameData = { ...gameData, bets: updatedBets, users: updatedUsers };
+    setGameData(newData);
+    if (bet.userPassword === currentUser.password) {
+      setCurrentUser({ ...currentUser, points: currentUser.points + bet.amount });
+    }
+    saveGameData(newData);
+  }
+
   async function handleSharePdf(label: string) {
     setSharing(true);
     const user = gameData?.users.find((u) => u.password === currentUser?.password);
@@ -756,7 +782,7 @@ export function Game({ days }: GameProps) {
 
   return (
     <div>
-      <BetsCarousel gameData={gameData} />
+      <BetsCarousel gameData={gameData} currentUser={currentUser} onCancelBet={handleCancelBet} />
       <div
         style={{
           display: "flex",
@@ -1190,9 +1216,30 @@ export function Game({ days }: GameProps) {
                       </span>
                     </span>
                     <div style={{ textAlign: "right" }}>
-                      <span style={{ fontFamily: mono, fontSize: "0.8rem", color: text }}>
-                        {bet.amount} pts
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "6px" }}>
+                        <span style={{ fontFamily: mono, fontSize: "0.8rem", color: text }}>
+                          {bet.amount} pts
+                        </span>
+                        {currentUser.name === "Luan" && !bet.settled && (
+                          <button
+                            onClick={() => handleCancelBet(bet.id)}
+                            style={{
+                              background: "transparent",
+                              border: `1px solid ${red}55`,
+                              borderRadius: "4px",
+                              color: red,
+                              fontSize: "0.6rem",
+                              fontFamily: bebas,
+                              letterSpacing: "1px",
+                              padding: "1px 5px",
+                              cursor: "pointer",
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                       <div style={{ fontFamily: bebas, fontSize: "0.7rem", letterSpacing: "1px" }}>
                         {!bet.settled ? (
                           <span>

@@ -35,6 +35,17 @@ export type GameData = {
   nextBetId: number;
 };
 
+export type Prediction = {
+  id: string;
+  tipo: "dezena" | "centena" | "grupo";
+  dezena: string;
+  horario: string;
+  dataPrevista: string;
+  score: number;
+  dataCriacao: string;
+  result: "pending" | "hit" | "miss";
+};
+
 export type ParsedTextResult = {
   date: string | null;
   draws: Draw[];

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ANIMAIS, THEME_COLORS } from "../constants";
-import type { GameData, GameBet } from "../types";
+import type { GameData, GameBet, GameUser } from "../types";
 
 const { bg, panel, bdr, yellow, green, orange, dim, text, red } = THEME_COLORS;
 const bebas = "'Bebas Neue', sans-serif";
@@ -30,9 +30,11 @@ function descFromBet(bet: GameBet): string {
 
 type Props = {
   gameData: GameData;
+  currentUser?: GameUser | null;
+  onCancelBet?: (betId: string) => void;
 };
 
-export function BetsCarousel({ gameData }: Props) {
+export function BetsCarousel({ gameData, currentUser, onCancelBet }: Props) {
   const [userIndex, setUserIndex] = useState(0);
 
   const today = formatDate(new Date());
@@ -144,9 +146,30 @@ export function BetsCarousel({ gameData }: Props) {
               </span>
             </div>
             <div style={{ textAlign: "right" }}>
-              <span style={{ fontFamily: mono, fontSize: "0.8rem", color: text }}>
-                {bet.amount} pts
-              </span>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "6px" }}>
+                <span style={{ fontFamily: mono, fontSize: "0.8rem", color: text }}>
+                  {bet.amount} pts
+                </span>
+                {currentUser?.name === "Luan" && !bet.settled && onCancelBet && (
+                  <button
+                    onClick={() => onCancelBet(bet.id)}
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${red}55`,
+                      borderRadius: "4px",
+                      color: red,
+                      fontSize: "0.6rem",
+                      fontFamily: bebas,
+                      letterSpacing: "1px",
+                      padding: "1px 5px",
+                      cursor: "pointer",
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
               <div style={{ fontFamily: bebas, fontSize: "0.7rem", letterSpacing: "1px" }}>
                 {!bet.settled ? (
                   <span style={{ color: orange }}>⏳ Pendente</span>

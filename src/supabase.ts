@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import type { DayResult, GameData } from "./types";
+import type { DayResult, GameData, Prediction } from "./types";
 
 const supabaseUrl =
   import.meta.env.VITE_SUPABASE_URL || "https://vjmknwxcqnatqnboqkus.supabase.co";
@@ -60,6 +60,32 @@ export async function saveGameData(gameData: GameData) {
     {
       id: GAME_ROW_ID,
       days: gameData,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" }
+  );
+
+  if (error) throw error;
+}
+
+const PREDICTIONS_ROW_ID = "predictions";
+
+export async function loadPredictions(): Promise<Prediction[]> {
+  const { data, error } = await supabase
+    .from(TABLE_NAME)
+    .select("days")
+    .eq("id", PREDICTIONS_ROW_ID)
+    .maybeSingle<{ days: Prediction[] }>();
+
+  if (error) throw error;
+  return data?.days ?? [];
+}
+
+export async function savePredictions(predictions: Prediction[]) {
+  const { error } = await supabase.from(TABLE_NAME).upsert(
+    {
+      id: PREDICTIONS_ROW_ID,
+      days: predictions,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "id" }
